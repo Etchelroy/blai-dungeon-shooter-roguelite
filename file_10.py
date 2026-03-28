@@ -1,105 +1,215 @@
-import random, math
-from src.tilemap import Tilemap, FLOOR, WALL, LAVA, ICE, SPIKE, VENT, VOID
-from settings import TILE_SIZE, ARENA_W, ARENA_H
+import pygame
+import random
+import math
 
-class Room:
-    def __init__(self, c, r, w, h):
-        self.c=c; self.r=r; self.w=w; self.h=h
-    def center(self):
-        return self.c+self.w//2, self.r+self.h//2
-    def intersects(self, other, margin=1):
-        return (self.c - margin < other.c+other.w and
-                self.c+self.w+margin > other.c and
-                self.r - margin < other.r+other.h and
-                self.r+self.h+margin > other.r)
+from player import Player
+from enemies import (Grunt, Brute, Speeder, Sniper, Shielder,
+                     Exploder, Summoner, Phantom, TankEnemy, BerserkerEnemy)
+from bosses import Boss1, Boss2, Boss3
+from arena import Arena
+from hud import HUD
+from particles import ParticleSystem
+from camera import Camera
+from weapons import (Pistol, Shotgun, RailGun, RocketLauncher,
+                     ChainLightning, BoomerangGun, FlameThrower, GrenadeLauncher)
+from abilities import (ShieldBubble, TimeSlow, TurretDeploy,
+                       BlackHole, MineLayer, AdrenalineRush)
 
-class ArenaGenerator:
-    def __init__(self, seed=None):
-        self.rng = random.Random(seed)
+SCREEN_W, SCREEN_H = 1280, 720
+ARENA_W, ARENA_H = 3200, 3200
 
-    def generate(self, wave=1):
-        tm = Tilemap()
-        cols, rows = tm.cols, tm.rows
-        # fill all walls
-        for r in range(rows):
-            for c in range(cols):
-                tm.set(c, r, WALL, self.rng.randint(0,3))
+ENEMY_TIERS = [
+    [Grunt, Speeder, Sniper],
+    [Brute, Shielder, Exploder, Summoner],
+    [Phantom, TankEnemy, BerserkerEnemy],
+]
 
-        rooms = []
-        attempts = 80
-        for _ in range(attempts):
-            w = self.rng.randint(6,14)
-            h = self.rng.randint(6,12)
-            c = self.rng.randint(2, cols-w-2)
-            r = self.rng.randint(2, rows-h-2)
-            room = Room(c,r,w,h)
-            if not any(room.intersects(ex) for ex in rooms):
-                rooms.append(room)
-                self._carve_room(tm, room)
+BOSS_CLASSES = [Boss1, Boss2, Boss3]
 
-        # corridors
-        for i in range(len(rooms)-1):
-            self._connect(tm, rooms[i], rooms[i+1])
+class Game:
+    def __init__(self, screen):
+        self.screen = screen
+        self.clock = pygame.time.Clock()
+        self.running = True
+        self.state = "playing"
 
-        # border walls
-        for r in range(rows):
-            tm.set(0,r,WALL); tm.set(cols-1,r,WALL)
-        for c in range(cols):
-            tm.set(c,0,WALL); tm.set(c,rows-1,WALL)
+        self.arena = Arena(ARENA_W, ARENA_H)
+        self.particles = ParticleSystem()
+        self.camera = Camera(SCREEN_W, SCREEN_H)
+        self.hud = HUD(SCREEN_W, SCREEN_H)
 
-        # hazards based on wave
-        hazard_count = min(3+wave, 12)
-        hazards = [LAVA,ICE,SPIKE,VENT]
-        for _ in range(hazard_count):
-            if len(rooms) > 2:
-                room = self.rng.choice(rooms[1:])
-                htype = self.rng.choice(hazards)
-                self._carve_hazard(tm, room, htype)
+        spawn = self.arena.get_spawn_point()
+        self.player = Player(spawn[0], spawn[1], self.particles)
+        self.player.arena_w = ARENA_W
+        self.player.arena_h = ARENA_H
 
-        # crates (stored as list of world positions)
-        crates = []
-        for room in rooms:
-            if self.rng.random() < 0.5:
-                cx = (room.c + self.rng.randint(1,room.w-2)) * TILE_SIZE + TILE_SIZE//2
-                cy = (room.r + self.rng.randint(1,room.h-2)) * TILE_SIZE + TILE_SIZE//2
-                crates.append([cx, cy, 30])  # x,y,hp
+        self._give_starting_weapons()
+        self._give_starting_secondary()
 
-        spawn = rooms[0].center() if rooms else (cols//2, rows//2)
-        spawn_world = (spawn[0]*TILE_SIZE + TILE_SIZE//2, spawn[1]*TILE_SIZE + TILE_SIZE//2)
+        self.enemies = []
+        self.boss = None
+        self.projectiles = []
+        self.wave = 0
+        self.score = 0
+        self.coins = 0
+        self.wave_timer = 0.0
+        self.wave_delay = 2.0
+        self.wave_active = False
+        self.enemies_to_spawn = []
+        self.spawn_timer = 0.0
+        self.boss_wave_interval = 5
 
-        enemy_spawns = []
-        for room in rooms[1:]:
-            ec = room.center()
-            enemy_spawns.append((ec[0]*TILE_SIZE+TILE_SIZE//2, ec[1]*TILE_SIZE+TILE_SIZE//2))
+        self.game_over = False
+        self.victory = False
+        self.game_over_timer = 0.0
 
-        return tm, spawn_world, enemy_spawns, crates
+        self.font = pygame.font.SysFont('Arial', 48, bold=True)
+        self.font_med = pygame.font.SysFont('Arial', 24)
 
-    def _carve_room(self, tm, room):
-        for r in range(room.r, room.r+room.h):
-            for c in range(room.c, room.c+room.w):
-                tm.set(c, r, FLOOR, tm.rng.randint(0,3) if hasattr(tm,'rng') else 0)
+        self._start_next_wave()
 
-    def _connect(self, tm, a, b):
-        ac, ar = a.center()
-        bc, br = b.center()
-        # horizontal then vertical
-        cc, cr = ac, ar
-        while cc != bc:
-            cc += 1 if bc > cc else -1
-            tm.set(cc, cr, FLOOR, 0)
-            tm.set(cc, cr+1, FLOOR, 0)
-        while cr != br:
-            cr += 1 if br > cr else -1
-            tm.set(cc, cr, FLOOR, 0)
-            tm.set(cc+1, cr, FLOOR, 0)
+    def _give_starting_weapons(self):
+        weapons = [
+            Pistol(), Shotgun(), RailGun(), RocketLauncher(),
+            ChainLightning(), BoomerangGun(), FlameThrower(), GrenadeLauncher()
+        ]
+        self.player.weapons = weapons
+        self.player.weapon_index = 0
 
-    def _carve_hazard(self, tm, room, htype):
-        # place a small patch of hazard tiles
-        rng = self.rng
-        sw = rng.randint(2,min(4,room.w-2))
-        sh = rng.randint(2,min(3,room.h-2))
-        sc = rng.randint(room.c+1, room.c+room.w-sw-1)
-        sr = rng.randint(room.r+1, room.r+room.h-sh-1)
-        for r in range(sr, sr+sh):
-            for c in range(sc, sc+sw):
-                tm.set(c, r, htype, 0)
+    def _give_starting_secondary(self):
+        secondaries = [
+            ShieldBubble(), TimeSlow(), TurretDeploy(),
+            BlackHole(), MineLayer(), AdrenalineRush()
+        ]
+        self.player.secondary = secondaries[0]
+        self.player.secondaries = secondaries
+        self.player.secondary_index = 0
+
+    def _start_next_wave(self):
+        self.wave += 1
+        self.wave_active = True
+
+        if self.wave % self.boss_wave_interval == 0:
+            boss_idx = (self.wave // self.boss_wave_interval - 1) % len(BOSS_CLASSES)
+            spawn = self.arena.get_spawn_point()
+            self.boss = BOSS_CLASSES[boss_idx](spawn[0], spawn[1], self.particles)
+            self.enemies_to_spawn = []
+        else:
+            self.boss = None
+            count = min(5 + self.wave * 3, 40)
+            tier = min(2, (self.wave - 1) // 3)
+            pool = []
+            for t in range(tier + 1):
+                pool.extend(ENEMY_TIERS[t])
+            self.enemies_to_spawn = [random.choice(pool) for _ in range(count)]
+            self.spawn_timer = 0.0
+
+    def _spawn_enemy(self, cls):
+        margin = 200
+        while True:
+            x = random.uniform(margin, ARENA_W - margin)
+            y = random.uniform(margin, ARENA_H - margin)
+            dx = x - self.player.x
+            dy = y - self.player.y
+            if math.sqrt(dx*dx + dy*dy) > 300:
+                break
+        e = cls(x, y, self.particles)
+        e.arena_w = ARENA_W
+        e.arena_h = ARENA_H
+        self.enemies.append(e)
+
+    def run(self):
+        while self.running:
+            dt = min(self.clock.tick(60) / 1000.0, 0.05)
+            self._handle_events()
+            if not self.game_over:
+                self._update(dt)
+            else:
+                self.game_over_timer -= dt
+                if self.game_over_timer <= 0:
+                    self.running = False
+            self._draw()
+        return "menu" if self.game_over else "menu"
+
+    def _handle_events(self):
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                self.running = False
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    self.running = False
+                elif event.key == pygame.K_TAB:
+                    if self.player.weapons:
+                        self.player.weapon_index = (self.player.weapon_index + 1) % len(self.player.weapons)
+                elif event.key == pygame.K_q:
+                    if self.player.secondary:
+                        self.player.secondary.activate(self.player, self.enemies, self.particles)
+                elif event.key == pygame.K_r:
+                    w = self._current_weapon()
+                    if w and hasattr(w, 'start_reload'):
+                        w.start_reload()
+                elif event.key in (pygame.K_1, pygame.K_2, pygame.K_3, pygame.K_4,
+                                   pygame.K_5, pygame.K_6, pygame.K_7, pygame.K_8):
+                    idx = event.key - pygame.K_1
+                    if idx < len(self.player.weapons):
+                        self.player.weapon_index = idx
+                elif event.key == pygame.K_F1:
+                    idx = (self.player.secondary_index + 1) % len(self.player.secondaries)
+                    self.player.secondary_index = idx
+                    self.player.secondary = self.player.secondaries[idx]
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                if event.button == 1:
+                    self._player_shoot()
+            self.player.handle_event(event)
+
+    def _current_weapon(self):
+        if self.player.weapons:
+            return self.player.weapons[self.player.weapon_index]
+        return None
+
+    def _player_shoot(self):
+        w = self._current_weapon()
+        if w is None:
+            return
+        mx, my = pygame.mouse.get_pos()
+        wx = mx + self.camera.offset_x
+        wy = my + self.camera.offset_y
+        new_projs = w.fire(self.player.x, self.player.y, wx, wy, self.player)
+        if new_projs:
+            self.projectiles.extend(new_projs)
+
+    def _update(self, dt):
+        keys = pygame.key.get_pressed()
+        mx, my = pygame.mouse.get_pos()
+        wx = mx + self.camera.offset_x
+        wy = my + self.camera.offset_y
+
+        # Continuous fire for auto weapons
+        if pygame.mouse.get_pressed()[0]:
+            w = self._current_weapon()
+            if w and getattr(w, 'auto', False):
+                new_projs = w.fire(self.player.x, self.player.y, wx, wy, self.player)
+                if new_projs:
+                    self.projectiles.extend(new_projs)
+
+        self.player.update(dt, keys, wx, wy, self.arena)
+        self.player.enemies_ref = self.enemies
+
+        # Melee
+        melee_projs = self.player.get_melee_projectiles()
+        self.projectiles.extend(melee_projs)
+
+        # Secondary update
+        if self.player.secondary:
+            result = self.player.secondary.update(dt, self.player, self.enemies, self.particles)
+            if result:
+                self.projectiles.extend(result)
+
+        # Turret projectiles
+        if hasattr(self.player, 'turrets'):
+            for turret in self.player.turrets:
+                turret.update(dt, self.enemies)
+                self.projectiles.extend(turret.get_projectiles())
+
+        # Spawn wave enemies
+        if self.enemies_to
