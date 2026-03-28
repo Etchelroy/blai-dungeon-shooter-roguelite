@@ -236,3 +236,255 @@ class BossInferno(BossBase):
             y1 = self.size + math.sin(a)*(self.size-8)
             x2 = self.size + math.cos(a)*self.size + random.uniform(-4,4)
             y2 = self.size + math.sin(a)*self.size + random.uniform(-4
+I'll implement the remaining files needed to complete the game.
+
+```python
+# filename: arena.py
+import pygame
+import random
+import math
+from constants import *
+
+TILE_FLOOR = 0
+TILE_WALL = 1
+TILE_LAVA = 2
+TILE_ICE = 3
+TILE_SPIKES = 4
+TILE_POISON = 5
+
+TILE_SIZE = 64
+
+class Crate:
+    def __init__(self, x, y):
+        self.rect = pygame.Rect(x, y, 48, 48)
+        self.hp = 30
+        self.alive = True
+        self.color = (139, 90, 43)
+        self.drop_chance = 0.3
+
+    def take_damage(self, dmg):
+        self.hp -= dmg
+        if self.hp <= 0:
+            self.alive = False
+            return True
+        return False
+
+    def draw(self, surface, camera):
+        if not self.alive:
+            return
+        sx, sy = camera.world_to_screen(self.rect.x, self.rect.y)
+        r = pygame.Rect(sx, sy, self.rect.width, self.rect.height)
+        pygame.draw.rect(surface, self.color, r)
+        pygame.draw.rect(surface, (100, 60, 20), r, 3)
+        # cross lines
+        pygame.draw.line(surface, (100, 60, 20), (sx+4, sy+4), (sx+44, sy+44), 2)
+        pygame.draw.line(surface, (100, 60, 20), (sx+44, sy+4), (sx+4, sy+44), 2)
+
+class Hazard:
+    def __init__(self, x, y, htype):
+        self.rect = pygame.Rect(x, y, TILE_SIZE, TILE_SIZE)
+        self.htype = htype
+        self.timer = 0
+        self.pulse = 0
+
+    def update(self, dt):
+        self.timer += dt
+        self.pulse = math.sin(self.timer * 3) * 0.5 + 0.5
+
+    def get_effect(self):
+        if self.htype == TILE_LAVA:
+            return {'damage': 15, 'type': 'fire'}
+        elif self.htype == TILE_ICE:
+            return {'damage': 0, 'type': 'slow', 'factor': 0.5}
+        elif self.htype == TILE_SPIKES:
+            return {'damage': 20, 'type': 'pierce'}
+        elif self.htype == TILE_POISON:
+            return {'damage': 5, 'type': 'poison', 'duration': 3.0}
+        return {}
+
+    def draw(self, surface, camera):
+        sx, sy = camera.world_to_screen(self.rect.x, self.rect.y)
+        r = pygame.Rect(sx, sy, TILE_SIZE, TILE_SIZE)
+        if self.htype == TILE_LAVA:
+            c = (int(200 + 55 * self.pulse), int(60 * self.pulse), 0)
+            pygame.draw.rect(surface, c, r)
+            for i in range(3):
+                bx = sx + random.randint(0, TILE_SIZE)
+                by = sy + random.randint(0, TILE_SIZE)
+                pygame.draw.circle(surface, (255, 150, 0), (bx, by), 3)
+        elif self.htype == TILE_ICE:
+            c = (int(100 + 80 * self.pulse), int(180 + 60 * self.pulse), 255)
+            pygame.draw.rect(surface, c, r)
+            pygame.draw.line(surface, (200, 240, 255), (sx+8, sy+32), (sx+56, sy+32), 2)
+            pygame.draw.line(surface, (200, 240, 255), (sx+32, sy+8), (sx+32, sy+56), 2)
+        elif self.htype == TILE_SPIKES:
+            pygame.draw.rect(surface, (80, 80, 80), r)
+            for i in range(4):
+                tx = sx + 8 + i * 14
+                pts = [(tx, sy+TILE_SIZE), (tx+7, sy+8), (tx+14, sy+TILE_SIZE)]
+                pygame.draw.polygon(surface, (160, 160, 180), pts)
+        elif self.htype == TILE_POISON:
+            c = (int(40 + 30 * self.pulse), int(120 + 40 * self.pulse), 20)
+            pygame.draw.rect(surface, c, r)
+            for i in range(2):
+                bx = sx + random.randint(8, 56)
+                by = sy + random.randint(8, 56)
+                pygame.draw.circle(surface, (80, 200, 40), (bx, by), 4)
+
+class Arena:
+    def __init__(self, width=25, height=25):
+        self.width = width
+        self.height = height
+        self.tiles = []
+        self.walls = []
+        self.hazards = []
+        self.crates = []
+        self.floor_rects = []
+        self.spawn_points = []
+        self.player_spawn = (width * TILE_SIZE // 2, height * TILE_SIZE // 2)
+        self.pixel_width = width * TILE_SIZE
+        self.pixel_height = height * TILE_SIZE
+        self._generate()
+
+    def _generate(self):
+        w, h = self.width, self.height
+        grid = [[TILE_WALL] * w for _ in range(h)]
+
+        # Cellular automata
+        for y in range(1, h-1):
+            for x in range(1, w-1):
+                grid[y][x] = TILE_FLOOR if random.random() > 0.4 else TILE_WALL
+
+        for _ in range(4):
+            new = [row[:] for row in grid]
+            for y in range(1, h-1):
+                for x in range(1, w-1):
+                    walls = sum(1 for dy in [-1,0,1] for dx in [-1,0,1]
+                                if grid[y+dy][x+dx] == TILE_WALL)
+                    new[y][x] = TILE_WALL if walls >= 5 else TILE_FLOOR
+            grid = new
+
+        # Force center open
+        cx, cy = w//2, h//2
+        for dy in range(-3, 4):
+            for dx in range(-3, 4):
+                if 0 < cy+dy < h-1 and 0 < cx+dx < w-1:
+                    grid[cy+dy][cx+dx] = TILE_FLOOR
+
+        self.tiles = grid
+        self.walls = []
+        self.floor_rects = []
+
+        floor_cells = []
+        for y in range(h):
+            for x in range(w):
+                rx = x * TILE_SIZE
+                ry = y * TILE_SIZE
+                r = pygame.Rect(rx, ry, TILE_SIZE, TILE_SIZE)
+                if grid[y][x] == TILE_WALL:
+                    self.walls.append(r)
+                else:
+                    self.floor_rects.append(r)
+                    floor_cells.append((x, y))
+
+        # Hazards
+        htype_list = [TILE_LAVA, TILE_ICE, TILE_SPIKES, TILE_POISON]
+        hazard_count = max(4, len(floor_cells) // 20)
+        used = set()
+        for _ in range(hazard_count):
+            attempts = 0
+            while attempts < 20:
+                cell = random.choice(floor_cells)
+                x, y = cell
+                dist = math.hypot(x - cx, y - cy)
+                if dist > 4 and cell not in used:
+                    used.add(cell)
+                    htype = random.choice(htype_list)
+                    self.hazards.append(Hazard(x*TILE_SIZE, y*TILE_SIZE, htype))
+                    break
+                attempts += 1
+
+        # Crates
+        crate_count = max(3, len(floor_cells) // 25)
+        for _ in range(crate_count):
+            attempts = 0
+            while attempts < 20:
+                cell = random.choice(floor_cells)
+                x, y = cell
+                dist = math.hypot(x - cx, y - cy)
+                cx2 = x * TILE_SIZE + 8
+                cy2 = y * TILE_SIZE + 8
+                if dist > 3 and cell not in used:
+                    used.add(cell)
+                    self.crates.append(Crate(cx2, cy2))
+                    break
+                attempts += 1
+
+        # Spawn points (edges of open area)
+        self.spawn_points = []
+        for cell in floor_cells:
+            x, y = cell
+            dist = math.hypot(x - cx, y - cy)
+            if dist > 6:
+                self.spawn_points.append((x * TILE_SIZE + TILE_SIZE//2,
+                                          y * TILE_SIZE + TILE_SIZE//2))
+
+        self.player_spawn = (cx * TILE_SIZE + TILE_SIZE//2,
+                             cy * TILE_SIZE + TILE_SIZE//2)
+
+    def get_wall_rects(self):
+        return self.walls
+
+    def get_crate_rects(self):
+        return [c.rect for c in self.crates if c.alive]
+
+    def get_solid_rects(self):
+        return self.walls + self.get_crate_rects()
+
+    def update(self, dt):
+        for h in self.hazards:
+            h.update(dt)
+        self.crates = [c for c in self.crates if c.alive]
+
+    def check_hazards(self, rect):
+        effects = []
+        for h in self.hazards:
+            if h.rect.colliderect(rect):
+                effects.append(h.get_effect())
+        return effects
+
+    def get_random_spawn(self):
+        if self.spawn_points:
+            return random.choice(self.spawn_points)
+        return self.player_spawn
+
+    def draw_floor(self, surface, camera):
+        colors = [(50, 45, 42), (48, 43, 40), (52, 47, 44)]
+        for r in self.floor_rects:
+            sx, sy = camera.world_to_screen(r.x, r.y)
+            if -TILE_SIZE <= sx <= SCREEN_W and -TILE_SIZE <= sy <= SCREEN_H:
+                c = colors[(r.x // TILE_SIZE + r.y // TILE_SIZE) % 3]
+                pygame.draw.rect(surface, c, pygame.Rect(sx, sy, TILE_SIZE, TILE_SIZE))
+
+    def draw_walls(self, surface, camera):
+        for r in self.walls:
+            sx, sy = camera.world_to_screen(r.x, r.y)
+            if -TILE_SIZE <= sx <= SCREEN_W and -TILE_SIZE <= sy <= SCREEN_H:
+                pygame.draw.rect(surface, (30, 28, 26), pygame.Rect(sx, sy, TILE_SIZE, TILE_SIZE))
+                pygame.draw.rect(surface, (20, 18, 16), pygame.Rect(sx, sy, TILE_SIZE, TILE_SIZE), 2)
+
+    def draw_hazards(self, surface, camera):
+        for h in self.hazards:
+            sx, sy = camera.world_to_screen(h.rect.x, h.rect.y)
+            if -TILE_SIZE <= sx <= SCREEN_W and -TILE_SIZE <= sy <= SCREEN_H:
+                h.draw(surface, camera)
+
+    def draw_crates(self, surface, camera):
+        for c in self.crates:
+            c.draw(surface, camera)
+
+    def draw(self, surface, camera):
+        self.draw_floor(surface, camera)
+        self.draw_hazards(surface, camera)
+        self.draw_walls(surface, camera)
+        self.draw_crates(surface, camera)
