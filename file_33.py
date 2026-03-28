@@ -1,141 +1,194 @@
-import random
-import math
 import pygame
-from settings import COLS, ROWS, TILE_PX, ARENA_W, ARENA_H
-from tilemap import Tilemap, TILE_FLOOR, TILE_WALL, TILE_LAVA, TILE_ICE, TILE_SPIKE, TILE_POISON
-from assets import make_crate_sprite
+import math
+import random
+from projectiles import Projectile
+from utils import normalize, distance
+from constants import *
 
-class Crate:
-    def __init__(self, x, y, hp=30):
-        self.x = x
-        self.y = y
-        self.hp = hp
-        self.max_hp = hp
-        self.rect = pygame.Rect(x, y, TILE_PX-4, TILE_PX-4)
-        self.alive = True
+class SecondaryBase:
+    def __init__(self, name, cooldown):
+        self.name = name
+        self.cooldown = cooldown
+        self._timer = 0.0
+        self.active = False
+        self.active_timer = 0.0
 
-    def take_damage(self, dmg, particles=None):
-        self.hp -= dmg
-        if particles:
-            particles.burst(self.rect.centerx, self.rect.centery, 6, (160,110,60), speed=80, life=0.4)
-        if self.hp <= 0:
-            self.alive = False
-            if particles:
-                particles.burst(self.rect.centerx, self.rect.centery, 16, (160,110,60), speed=120, life=0.6)
+    def update(self, dt):
+        if self._timer > 0:
+            self._timer -= dt
+        if self.active_timer > 0:
+            self.active_timer -= dt
+            if self.active_timer <= 0:
+                self.active = False
+                self.on_end()
 
-    def draw(self, surface, cam_ox, cam_oy):
-        sx = self.rect.x - int(cam_ox)
-        sy = self.rect.y - int(cam_oy)
-        surf = make_crate_sprite(self.hp/self.max_hp)
-        surface.blit(surf, (sx, sy))
+    def ready(self):
+        return self._timer <= 0
 
-class Arena:
+    def activate(self, player, enemies, projectiles, particles):
+        if not self.ready():
+            return False
+        self._timer = self.cooldown
+        return True
+
+    def on_end(self):
+        pass
+
+    def cooldown_frac(self):
+        return max(0.0, 1.0 - self._timer / self.cooldown)
+
+class ShieldAbility(SecondaryBase):
     def __init__(self):
-        self.tilemap = Tilemap()
-        self.crates = []
-        self.spawn_points = []
-        self.player_start = (ARENA_W//2, ARENA_H//2)
-        self._hazard_rects = []
-        self.generate()
+        super().__init__("Shield", 8.0)
+        self.duration = 3.0
 
-    def generate(self, seed=None):
-        rng = random.Random(seed)
-        tm = self.tilemap
-        # Fill borders with walls
-        for row in range(ROWS):
-            for col in range(COLS):
-                if row == 0 or row == ROWS-1 or col == 0 or col == COLS-1:
-                    tm.set(col, row, TILE_WALL, rng.randint(0,2))
-                else:
-                    tm.set(col, row, TILE_FLOOR, rng.randint(0,2))
+    def activate(self, player, enemies, projectiles, particles):
+        if not super().activate(player, enemies, projectiles, particles):
+            return False
+        player.shielded = True
+        player.shield_timer = self.duration
+        self.active = True
+        self.active_timer = self.duration
+        particles.emit(player.x, player.y, 20, (100,180,255), speed=80, life=0.5, size=8)
+        return True
 
-        # Random wall clusters
-        for _ in range(18):
-            cx = rng.randint(3, COLS-4)
-            cy = rng.randint(3, ROWS-4)
-            w = rng.randint(1, 4)
-            h = rng.randint(1, 4)
-            for r in range(cy, min(cy+h, ROWS-1)):
-                for c in range(cx, min(cx+w, COLS-1)):
-                    # Keep center clear
-                    if abs(c - COLS//2) > 3 or abs(r - ROWS//2) > 3:
-                        tm.set(c, r, TILE_WALL, rng.randint(0,2))
+    def on_end(self):
+        pass
 
-        # Hazard zones
-        hazard_types = [TILE_LAVA, TILE_ICE, TILE_SPIKE, TILE_POISON]
-        self._hazard_rects.clear()
-        for _ in range(6):
-            htype = rng.choice(hazard_types)
-            hx = rng.randint(3, COLS-8)
-            hy = rng.randint(3, ROWS-8)
-            hw = rng.randint(2, 5)
-            hh = rng.randint(2, 4)
-            for r in range(hy, min(hy+hh, ROWS-1)):
-                for c in range(hx, min(hx+hw, COLS-1)):
-                    if abs(c - COLS//2) > 4 or abs(r - ROWS//2) > 4:
-                        tm.set(c, r, htype)
-                        rect = pygame.Rect(c*TILE_PX, r*TILE_PX, TILE_PX, TILE_PX)
-                        self._hazard_rects.append((rect, htype))
+class TimeSlowAbility(SecondaryBase):
+    def __init__(self):
+        super().__init__("Time Slow", 12.0)
+        self.duration = 4.0
 
-        # Crates
-        self.crates.clear()
-        for _ in range(20):
-            cx = rng.randint(2, COLS-3) * TILE_PX + 2
-            cy = rng.randint(2, ROWS-3) * TILE_PX + 2
-            tc, tr = self.tilemap.world_to_tile(cx, cy)
-            if not self.tilemap.is_solid(tc, tr):
-                self.crates.append(Crate(cx, cy, rng.randint(20,40)))
+    def activate(self, player, enemies, projectiles, particles):
+        if not super().activate(player, enemies, projectiles, particles):
+            return False
+        self.active = True
+        self.active_timer = self.duration
+        for e in enemies:
+            e.slow_timer = self.duration
+            e.slow_factor = 0.25
+        particles.emit(player.x, player.y, 15, (200,100,255), speed=60, life=0.8, size=6)
+        return True
 
-        # Spawn points (edges of center area)
-        self.spawn_points.clear()
-        for i in range(20):
-            a = i * 2 * math.pi / 20
-            r = rng.uniform(180, 400)
-            sx = ARENA_W//2 + math.cos(a)*r
-            sy = ARENA_H//2 + math.sin(a)*r
-            sx = max(TILE_PX*2, min(ARENA_W-TILE_PX*2, sx))
-            sy = max(TILE_PX*2, min(ARENA_H-TILE_PX*2, sy))
-            self.spawn_points.append((sx, sy))
+class NovaBombAbility(SecondaryBase):
+    def __init__(self):
+        super().__init__("Nova Bomb", 15.0)
 
-        self.player_start = (ARENA_W//2, ARENA_H//2)
+    def activate(self, player, enemies, projectiles, particles):
+        if not super().activate(player, enemies, projectiles, particles):
+            return False
+        particles.emit_explosion(player.x, player.y, 60)
+        radius = 200
+        for e in enemies:
+            d = distance((player.x, player.y), (e.x, e.y))
+            if d < radius:
+                e.take_damage(60, particles)
+                nx, ny = normalize((e.x - player.x, e.y - player.y))
+                e.vx += nx * 400
+                e.vy += ny * 400
+        for angle in range(0, 360, 20):
+            a = math.radians(angle)
+            spd = 350
+            vx = math.cos(a) * spd
+            vy = math.sin(a) * spd
+            p = Projectile(player.x, player.y, vx, vy, 25, "player", "plasma", lifetime=1.0)
+            projectiles.append(p)
+        return True
 
-    def get_hazard_at(self, wx, wy):
-        from tilemap import TILE_LAVA, TILE_ICE, TILE_SPIKE, TILE_POISON
-        col, row = self.tilemap.world_to_tile(wx, wy)
-        t = self.tilemap.get(col, row)
-        if t in (TILE_LAVA, TILE_ICE, TILE_SPIKE, TILE_POISON):
-            return t
-        return None
+class TurretAbility(SecondaryBase):
+    def __init__(self):
+        super().__init__("Turret", 18.0)
+        self.duration = 8.0
+        self.turrets = []
 
-    def update(self, dt, particles=None):
-        self.tilemap.update(dt)
-        self.crates = [c for c in self.crates if c.alive]
+    def activate(self, player, enemies, projectiles, particles):
+        if not super().activate(player, enemies, projectiles, particles):
+            return False
+        self.active = True
+        self.active_timer = self.duration
+        for i in range(2):
+            ox = random.uniform(-60, 60)
+            oy = random.uniform(-60, 60)
+            self.turrets.append(Turret(player.x + ox, player.y + oy, self.duration))
+        particles.emit(player.x, player.y, 10, (255,200,50), speed=100, life=0.4)
+        return True
 
-    def draw(self, surface, cam_ox, cam_oy):
-        self.tilemap.draw(surface, cam_ox, cam_oy)
-        for c in self.crates:
-            c.draw(surface, cam_ox, cam_oy)
+    def update_turrets(self, dt, enemies, projectiles, particles):
+        self.turrets = [t for t in self.turrets if t.alive]
+        for t in self.turrets:
+            t.update(dt, enemies, projectiles, particles)
 
-    def get_wall_rects(self):
-        rects = []
-        tm = self.tilemap
-        for row in range(ROWS):
-            for col in range(COLS):
-                if tm.is_solid(col, row):
-                    rects.append(pygame.Rect(col*TILE_PX, row*TILE_PX, TILE_PX, TILE_PX))
-        return rects
+    def on_end(self):
+        self.turrets.clear()
 
-    def get_solid_rects_near(self, wx, wy, radius=200):
-        rects = []
-        tm = self.tilemap
-        col0 = max(0, int((wx-radius)//TILE_PX))
-        col1 = min(COLS, int((wx+radius)//TILE_PX)+1)
-        row0 = max(0, int((wy-radius)//TILE_PX))
-        row1 = min(ROWS, int((wy+radius)//TILE_PX)+1)
-        for row in range(row0, row1):
-            for col in range(col0, col1):
-                if tm.is_solid(col, row):
-                    rects.append(pygame.Rect(col*TILE_PX, row*TILE_PX, TILE_PX, TILE_PX))
-        for c in self.crates:
-            rects.append(c.rect)
-        return rects
+    def draw_turrets(self, surface, cam):
+        for t in self.turrets:
+            t.draw(surface, cam)
+
+class Turret:
+    def __init__(self, x, y, lifetime):
+        self.x = x; self.y = y
+        self.alive = True
+        self.lifetime = lifetime
+        self._fire_timer = 0.0
+        self.fire_rate = 0.4
+
+    def update(self, dt, enemies, projectiles, particles):
+        self.lifetime -= dt
+        if self.lifetime <= 0:
+            self.alive = False
+            return
+        self._fire_timer -= dt
+        if self._fire_timer <= 0 and enemies:
+            living = [e for e in enemies if e.alive]
+            if living:
+                target = min(living, key=lambda e: (e.x-self.x)**2+(e.y-self.y)**2)
+                angle = math.atan2(target.y - self.y, target.x - self.x)
+                vx = math.cos(angle)*400
+                vy = math.sin(angle)*400
+                p = Projectile(self.x, self.y, vx, vy, 20, "player", "bullet", lifetime=1.5)
+                projectiles.append(p)
+                self._fire_timer = self.fire_rate
+
+    def draw(self, surface, cam):
+        sx, sy = cam.apply(self.x, self.y)
+        pygame.draw.circle(surface, (200,180,50), (sx, sy), 10)
+        pygame.draw.circle(surface, (255,220,80), (sx, sy), 10, 2)
+
+class TeleportAbility(SecondaryBase):
+    def __init__(self):
+        super().__init__("Teleport", 6.0)
+
+    def activate(self, player, enemies, projectiles, particles):
+        if not super().activate(player, enemies, projectiles, particles):
+            return False
+        mx, my = pygame.mouse.get_pos()
+        from camera import Camera
+        wx, wy = player.x, player.y
+        tx = player.x + (mx - 640)
+        ty = player.y + (my - 360)
+        particles.emit(player.x, player.y, 15, (180,100,255), speed=80, life=0.4)
+        player.x = tx
+        player.y = ty
+        particles.emit(player.x, player.y, 15, (180,100,255), speed=80, life=0.4)
+        return True
+
+class AdrenalineAbility(SecondaryBase):
+    def __init__(self):
+        super().__init__("Adrenaline", 10.0)
+        self.duration = 5.0
+
+    def activate(self, player, enemies, projectiles, particles):
+        if not super().activate(player, enemies, projectiles, particles):
+            return False
+        player.adrenaline_timer = self.duration
+        self.active = True
+        self.active_timer = self.duration
+        particles.emit(player.x, player.y, 20, (255,80,80), speed=100, life=0.5, size=6)
+        return True
+
+SECONDARY_CLASSES = [ShieldAbility, TimeSlowAbility, NovaBombAbility, TurretAbility, TeleportAbility, AdrenalineAbility]
+
+def make_secondary(idx):
+    return SECONDARY_CLASSES[idx % len(SECONDARY_CLASSES)]()
