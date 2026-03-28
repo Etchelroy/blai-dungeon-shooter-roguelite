@@ -2,180 +2,114 @@ import pygame
 import math
 import random
 from constants import *
-from utils import angle_to, vec_from_angle
-from projectiles import Projectile
+from utils import *
+from projectiles import Projectile, FlameProjectile, BoomerangProjectile, ChainProjectile
 
-class WeaponBase:
-    def __init__(self, name, wpn_id, ammo, max_ammo, fire_rate, reload_time):
-        self.name = name; self.wpn_id = wpn_id
-        self.ammo = ammo; self.max_ammo = max_ammo
-        self.fire_rate = fire_rate; self.reload_time = reload_time
-        self.fire_timer = 0.0; self.reload_timer = 0.0
-        self.is_reloading = False; self.auto = False
+class WeaponState:
+    def __init__(self, wtype):
+        self.wtype = wtype
+        self.cooldown = 0.0
+        self.ammo = -1  # -1 = infinite
+        self.max_ammo = -1
+        self.reload_time = 0.0
+        self.reloading = False
+        self._setup()
+
+    def _setup(self):
+        configs = {
+            WEAPON_PISTOL:      dict(cooldown=0.25, ammo=-1),
+            WEAPON_SHOTGUN:     dict(cooldown=0.7,  ammo=6, max_ammo=6, reload=1.2),
+            WEAPON_RIFLE:       dict(cooldown=0.08, ammo=30, max_ammo=30, reload=1.5),
+            WEAPON_LAUNCHER:    dict(cooldown=1.0,  ammo=4, max_ammo=4, reload=2.0),
+            WEAPON_SNIPER:      dict(cooldown=1.2,  ammo=5, max_ammo=5, reload=2.0),
+            WEAPON_FLAMETHROWER:dict(cooldown=0.05, ammo=100, max_ammo=100, reload=1.0),
+            WEAPON_CHAIN:       dict(cooldown=0.4,  ammo=-1),
+            WEAPON_BOOMERANG:   dict(cooldown=0.8,  ammo=-1),
+        }
+        c = configs.get(self.wtype, {})
+        self.fire_cooldown = c.get('cooldown', 0.3)
+        self.ammo = c.get('ammo', -1)
+        self.max_ammo = c.get('max_ammo', -1)
+        self.reload_duration = c.get('reload', 0.0)
+        self.reloading = False
+        self.reload_time = 0.0
 
     def update(self, dt):
-        self.fire_timer = max(0, self.fire_timer - dt)
-        if self.is_reloading:
-            self.reload_timer -= dt
-            if self.reload_timer <= 0:
+        if self.cooldown > 0:
+            self.cooldown -= dt
+        if self.reloading:
+            self.reload_time -= dt
+            if self.reload_time <= 0:
+                self.reloading = False
                 self.ammo = self.max_ammo
-                self.is_reloading = False
 
     def can_fire(self):
-        return self.fire_timer <= 0 and not self.is_reloading and self.ammo > 0
+        return self.cooldown <= 0 and not self.reloading and (self.ammo != 0)
 
-    def start_reload(self):
-        if not self.is_reloading and self.ammo < self.max_ammo:
-            self.is_reloading = True
-            self.reload_timer = self.reload_time
+    def consume_ammo(self):
+        if self.ammo > 0:
+            self.ammo -= 1
+            if self.ammo == 0 and self.max_ammo > 0:
+                self.reloading = True
+                self.reload_time = self.reload_duration
 
-    def consume_ammo(self, count=1):
-        self.ammo -= count
-        if self.ammo <= 0:
-            self.ammo = 0
-            self.start_reload()
+    def reload(self):
+        if self.max_ammo > 0 and not self.reloading:
+            self.reloading = True
+            self.reload_time = self.reload_duration
 
-    def fire(self, x, y, target_x, target_y, projectiles, particles):
-        pass
+def fire_weapon(wtype, px, py, angle, proj_manager, owner_ref=None, particles=None):
+    speed_base = 500
+    if wtype == WEAPON_PISTOL:
+        vx = math.cos(angle)*speed_base
+        vy = math.sin(angle)*speed_base
+        proj_manager.add(Projectile(px, py, vx, vy, 20, 'bullet', 'player'))
 
-class Pistol(WeaponBase):
-    def __init__(self):
-        super().__init__("Pistol", WPN_PISTOL, 12, 12, 0.25, 1.5)
-        self.auto = False
-
-    def fire(self, x, y, tx, ty, projectiles, particles):
-        if not self.can_fire(): return False
-        a = angle_to((x,y),(tx,ty))
-        vx, vy = math.cos(a)*600, math.sin(a)*600
-        p = Projectile(x, y, vx, vy, 22, "player", "bullet", size=6, lifetime=2.0, color=YELLOW)
-        projectiles.append(p)
-        self.fire_timer = self.fire_rate
-        self.consume_ammo()
-        particles.emit_spark(x, y, YELLOW, 3)
-        return True
-
-class Shotgun(WeaponBase):
-    def __init__(self):
-        super().__init__("Shotgun", WPN_SHOTGUN, 6, 6, 0.7, 2.0)
-
-    def fire(self, x, y, tx, ty, projectiles, particles):
-        if not self.can_fire(): return False
-        a = angle_to((x,y),(tx,ty))
+    elif wtype == WEAPON_SHOTGUN:
         for i in range(7):
             spread = random.uniform(-0.25, 0.25)
-            ang = a + spread
+            a = angle + spread
             spd = random.uniform(350, 500)
-            vx, vy = math.cos(ang)*spd, math.sin(ang)*spd
-            p = Projectile(x, y, vx, vy, 18, "player", "pellet", size=5, lifetime=0.6, color=ORANGE)
-            projectiles.append(p)
-        self.fire_timer = self.fire_rate
-        self.consume_ammo()
-        particles.emit_spark(x, y, ORANGE, 8)
-        return True
+            vx = math.cos(a)*spd
+            vy = math.sin(a)*spd
+            proj_manager.add(Projectile(px, py, vx, vy, 15, 'pellet', 'player', size=7))
 
-class Sniper(WeaponBase):
-    def __init__(self):
-        super().__init__("Sniper", WPN_SNIPER, 5, 5, 1.2, 2.5)
+    elif wtype == WEAPON_RIFLE:
+        spread = random.uniform(-0.03, 0.03)
+        a = angle + spread
+        vx = math.cos(a)*750
+        vy = math.sin(a)*750
+        proj_manager.add(Projectile(px, py, vx, vy, 18, 'bullet', 'player', pierce=1))
 
-    def fire(self, x, y, tx, ty, projectiles, particles):
-        if not self.can_fire(): return False
-        a = angle_to((x,y),(tx,ty))
-        vx, vy = math.cos(a)*1200, math.sin(a)*1200
-        p = Projectile(x, y, vx, vy, 90, "player", "sniper", pierce=True, size=5, lifetime=2.5, color=CYAN)
-        projectiles.append(p)
-        self.fire_timer = self.fire_rate
-        self.consume_ammo()
-        particles.emit_spark(x, y, CYAN, 10)
-        return True
+    elif wtype == WEAPON_LAUNCHER:
+        vx = math.cos(angle)*300
+        vy = math.sin(angle)*300
+        p = Projectile(px, py, vx, vy, 60, 'rocket', 'player', aoe=100, size=12, lifetime=4.0)
+        proj_manager.add(p)
 
-class SMG(WeaponBase):
-    def __init__(self):
-        super().__init__("SMG", WPN_SMG, 30, 30, 0.09, 2.0)
-        self.auto = True
+    elif wtype == WEAPON_SNIPER:
+        vx = math.cos(angle)*1200
+        vy = math.sin(angle)*1200
+        proj_manager.add(Projectile(px, py, vx, vy, 80, 'sniper', 'player', pierce=5, size=6, lifetime=2.0))
 
-    def fire(self, x, y, tx, ty, projectiles, particles):
-        if not self.can_fire(): return False
-        a = angle_to((x,y),(tx,ty)) + random.uniform(-0.12, 0.12)
-        spd = 520
-        vx, vy = math.cos(a)*spd, math.sin(a)*spd
-        p = Projectile(x, y, vx, vy, 14, "player", "bullet", size=4, lifetime=1.5, color=YELLOW)
-        projectiles.append(p)
-        self.fire_timer = self.fire_rate
-        self.consume_ammo()
-        return True
+    elif wtype == WEAPON_FLAMETHROWER:
+        spread = random.uniform(-0.3, 0.3)
+        a = angle + spread
+        spd = random.uniform(150, 280)
+        vx = math.cos(a)*spd
+        vy = math.sin(a)*spd
+        proj_manager.add(FlameProjectile(px, py, vx, vy, 8))
+        if particles:
+            particles.emit(px, py, 2, (50,150), (255,100,0),
+                          life_range=(0.1,0.3), size=5,
+                          angle_range=(a-0.3, a+0.3))
 
-class RocketLauncher(WeaponBase):
-    def __init__(self):
-        super().__init__("Rocket", WPN_LAUNCHER, 3, 3, 0.8, 3.0)
+    elif wtype == WEAPON_CHAIN:
+        vx = math.cos(angle)*450
+        vy = math.sin(angle)*450
+        proj_manager.add(ChainProjectile(px, py, vx, vy, 25))
 
-    def fire(self, x, y, tx, ty, projectiles, particles):
-        if not self.can_fire(): return False
-        a = angle_to((x,y),(tx,ty))
-        spd = 380
-        vx, vy = math.cos(a)*spd, math.sin(a)*spd
-        p = Projectile(x, y, vx, vy, 60, "player", "rocket", size=10, lifetime=3.0, color=ORANGE)
-        p.aoe_radius = 100; p.aoe_damage = 80
-        projectiles.append(p)
-        self.fire_timer = self.fire_rate
-        self.consume_ammo()
-        particles.emit_smoke(x, y, 4)
-        return True
-
-class ChainLightning(WeaponBase):
-    def __init__(self):
-        super().__init__("Chain", WPN_CHAIN, 20, 20, 0.35, 2.0)
-        self.auto = True
-
-    def fire(self, x, y, tx, ty, projectiles, particles):
-        if not self.can_fire(): return False
-        a = angle_to((x,y),(tx,ty))
-        vx, vy = math.cos(a)*500, math.sin(a)*500
-        p = Projectile(x, y, vx, vy, 25, "player", "chain", size=7, lifetime=1.5, color=PURPLE)
-        p.max_chain = 3
-        projectiles.append(p)
-        self.fire_timer = self.fire_rate
-        self.consume_ammo()
-        return True
-
-class Boomerang(WeaponBase):
-    def __init__(self):
-        super().__init__("Boomerang", WPN_BOOMERANG, 1, 1, 1.5, 2.0)
-        self._in_flight = False
-
-    def update(self, dt):
-        super().update(dt)
-
-    def fire(self, x, y, tx, ty, projectiles, particles):
-        if not self.can_fire(): return False
-        a = angle_to((x,y),(tx,ty))
-        spd = 420
-        vx, vy = math.cos(a)*spd, math.sin(a)*spd
-        p = Projectile(x, y, vx, vy, 40, "player", "boomerang", pierce=True, size=9, lifetime=4.0, color=TEAL)
-        p.is_boomerang = True
-        projectiles.append(p)
-        self.fire_timer = self.fire_rate
-        self.consume_ammo()
-        return True
-
-class Flamethrower(WeaponBase):
-    def __init__(self):
-        super().__init__("Flame", WPN_FLAMETHROWER, 100, 100, 0.06, 2.5)
-        self.auto = True
-
-    def fire(self, x, y, tx, ty, projectiles, particles):
-        if not self.can_fire(): return False
-        a = angle_to((x,y),(tx,ty)) + random.uniform(-0.3, 0.3)
-        spd = random.uniform(200, 350)
-        vx, vy = math.cos(a)*spd, math.sin(a)*spd
-        p = Projectile(x, y, vx, vy, 8, "player", "flame", size=6, lifetime=0.5, color=RED)
-        p.dot_damage = 5; p.dot_duration = 2.0
-        projectiles.append(p)
-        self.fire_timer = self.fire_rate
-        self.consume_ammo()
-        particles.emit(x, y, (255,140,20), 2, speed=60, life=0.3, size=8, gravity=-30)
-        return True
-
-WEAPON_CLASSES = [Pistol, Shotgun, Sniper, SMG, RocketLauncher, ChainLightning, Boomerang, Flamethrower]
-
-def create_weapon(wpn_id):
-    return WEAPON_CLASSES[wpn_id]()
+    elif wtype == WEAPON_BOOMERANG:
+        vx = math.cos(angle)*380
+        vy = math.sin(angle)*380
+        proj_manager.add(BoomerangProjectile(px, py, vx, vy, 30, owner_ref))
