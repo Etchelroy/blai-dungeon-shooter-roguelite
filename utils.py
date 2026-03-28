@@ -1,80 +1,56 @@
-import math
-import pygame
+import math, random, pygame
+
+def normalize(v):
+    x, y = v
+    l = math.hypot(x, y)
+    if l == 0:
+        return (0, 0)
+    return (x/l, y/l)
+
+def dist(a, b):
+    return math.hypot(a[0]-b[0], a[1]-b[1])
+
+def angle_to(a, b):
+    return math.atan2(b[1]-a[1], b[0]-a[0])
 
 def lerp(a, b, t):
-    return a + (b - a) * t
+    return a + (b-a)*t
 
-def clamp(v, mn, mx):
-    return max(mn, min(mx, v))
+def clamp(v, lo, hi):
+    return max(lo, min(hi, v))
 
-def vec2_len(x, y):
-    return math.sqrt(x*x + y*y)
+def rand_color_var(base, var=30):
+    r = clamp(base[0]+random.randint(-var,var),0,255)
+    g = clamp(base[1]+random.randint(-var,var),0,255)
+    b = clamp(base[2]+random.randint(-var,var),0,255)
+    return (r,g,b)
 
-def vec2_norm(x, y):
-    l = vec2_len(x, y)
-    if l == 0:
-        return 0.0, 0.0
-    return x/l, y/l
+def draw_bar(surf, x, y, w, h, val, mx, fg, bg=(30,30,30), border=(200,200,200)):
+    pygame.draw.rect(surf, bg, (x,y,w,h))
+    if mx > 0:
+        fw = int(w * clamp(val/mx,0,1))
+        if fw > 0:
+            pygame.draw.rect(surf, fg, (x,y,fw,h))
+    pygame.draw.rect(surf, border, (x,y,w,h), 1)
 
-def vec2_dist(ax, ay, bx, by):
-    return math.sqrt((ax-bx)**2 + (ay-by)**2)
+def rotate_point(px, py, cx, cy, angle):
+    s, c = math.sin(angle), math.cos(angle)
+    px -= cx; py -= cy
+    nx = px*c - py*s
+    ny = px*s + py*c
+    return nx+cx, ny+cy
 
-def angle_to(ax, ay, bx, by):
-    return math.atan2(by - ay, bx - ax)
+def screen_shake_offset(intensity, duration_left):
+    if duration_left <= 0:
+        return (0,0)
+    a = random.uniform(-intensity, intensity)
+    b = random.uniform(-intensity, intensity)
+    return (a, b)
 
-def move_toward(current, target, step):
-    if abs(target - current) <= step:
-        return target
-    return current + step if target > current else current - step
+def circle_rect_overlap(cx, cy, cr, rx, ry, rw, rh):
+    nearest_x = clamp(cx, rx, rx+rw)
+    nearest_y = clamp(cy, ry, ry+rh)
+    return math.hypot(cx-nearest_x, cy-nearest_y) < cr
 
-def rotate_vec(x, y, angle):
-    c, s = math.cos(angle), math.sin(angle)
-    return x*c - y*s, x*s + y*c
-
-def rect_from_center(cx, cy, w, h):
-    return pygame.Rect(cx - w//2, cy - h//2, w, h)
-
-def screen_shake_offset(intensity, timer):
-    import random
-    if timer <= 0:
-        return 0, 0
-    ox = random.randint(-int(intensity), int(intensity))
-    oy = random.randint(-int(intensity), int(intensity))
-    return ox, oy
-
-def draw_text(surf, text, x, y, font, color, center=False, shadow=True):
-    if shadow:
-        s = font.render(text, True, (0, 0, 0))
-        r = s.get_rect()
-        if center:
-            r.centerx = x
-            r.centery = y
-        else:
-            r.x = x
-            r.y = y
-        surf.blit(s, (r.x+2, r.y+2))
-    img = font.render(text, True, color)
-    r = img.get_rect()
-    if center:
-        r.centerx = x
-        r.centery = y
-    else:
-        r.x = x
-        r.y = y
-    surf.blit(img, r)
-    return r
-
-def hsv_to_rgb(h, s, v):
-    import colorsys
-    r, g, b = colorsys.hsv_to_rgb(h, s, v)
-    return int(r*255), int(g*255), int(b*255)
-
-def color_lerp(c1, c2, t):
-    return (
-        int(c1[0] + (c2[0]-c1[0])*t),
-        int(c1[1] + (c2[1]-c1[1])*t),
-        int(c1[2] + (c2[2]-c1[2])*t),
-    )
-
-def pulse(t, speed=2.0, lo=0.5, hi=1.0):
-    return lo + (hi-lo) * (0.5 + 0.5*math.sin(t*speed))
+def point_in_rect(px, py, rx, ry, rw, rh):
+    return rx <= px <= rx+rw and ry <= py <= ry+rh
