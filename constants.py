@@ -1,15 +1,12 @@
 import pygame
 
-# Screen
-SCREEN_W = 1280
-SCREEN_H = 720
+SCREEN_WIDTH = 1280
+SCREEN_HEIGHT = 720
 FPS = 60
-TITLE = "Dungeon Shooter Roguelite"
 
-# Tile
-TILE = 48
-ARENA_W = 40
-ARENA_H = 30
+TILE_SIZE = 48
+MAP_WIDTH = 40
+MAP_HEIGHT = 30
 
 # Colors
 BLACK = (0, 0, 0)
@@ -20,78 +17,90 @@ BLUE = (50, 100, 220)
 YELLOW = (255, 220, 0)
 ORANGE = (255, 140, 0)
 PURPLE = (160, 50, 220)
-CYAN = (0, 220, 220)
+CYAN = (50, 220, 220)
 GRAY = (120, 120, 120)
 DARK_GRAY = (40, 40, 40)
-LIGHT_GRAY = (200, 200, 200)
+LIGHT_GRAY = (180, 180, 180)
 DARK_RED = (140, 20, 20)
-DARK_BLUE = (20, 40, 140)
-GOLD = (255, 200, 50)
-PINK = (255, 100, 180)
-LIME = (150, 255, 50)
-TEAL = (0, 180, 160)
-BROWN = (120, 70, 30)
-ICE_BLUE = (150, 220, 255)
-POISON_GREEN = (80, 200, 80)
-LAVA_ORANGE = (255, 100, 20)
 DARK_GREEN = (20, 100, 20)
-
-# Player
-PLAYER_SPEED = 200
-PLAYER_FRICTION = 0.82
-PLAYER_MAX_HP = 150
-PLAYER_DASH_SPEED = 600
-PLAYER_DASH_DURATION = 0.15
-PLAYER_DASH_COOLDOWN = 1.2
-PLAYER_MELEE_DAMAGE = 40
-PLAYER_MELEE_RANGE = 80
-PLAYER_MELEE_COOLDOWN = 0.5
-PLAYER_IFRAMES = 0.5
-
-# Weapons
-WEAPONS = {
-    "pistol":      {"name": "Pistol",      "damage": 25,  "fire_rate": 0.25, "ammo": -1,  "color": YELLOW,     "type": "single"},
-    "shotgun":     {"name": "Shotgun",     "damage": 15,  "fire_rate": 0.7,  "ammo": 40,  "color": ORANGE,     "type": "pellets"},
-    "sniper":      {"name": "Sniper",      "damage": 120, "fire_rate": 1.2,  "ammo": 20,  "color": CYAN,       "type": "pierce"},
-    "launcher":    {"name": "Launcher",    "damage": 80,  "fire_rate": 1.5,  "ammo": 15,  "color": RED,        "type": "aoe"},
-    "chain":       {"name": "Chain Gun",   "damage": 12,  "fire_rate": 0.08, "ammo": 120, "color": LIGHT_GRAY, "type": "chain"},
-    "boomerang":   {"name": "Boomerang",   "damage": 35,  "fire_rate": 0.9,  "ammo": 30,  "color": LIME,       "type": "return"},
-    "flamethrower":{"name": "Flamethrower","damage": 8,   "fire_rate": 0.05, "ammo": 80,  "color": LAVA_ORANGE,"type": "cone_dot"},
-    "railgun":     {"name": "Railgun",     "damage": 200, "fire_rate": 2.5,  "ammo": 10,  "color": PURPLE,     "type": "rail"},
-}
-
-# Secondaries
-SECONDARIES = ["shield","grenade","heal","turret","decoy","emp"]
-
-# Enemy tiers
-TIER1 = ["goblin","skeleton","bat","slime"]
-TIER2 = ["orc","mage","archer","knight"]
-TIER3 = ["demon","golem"]
-
-# Wave
-BASE_ENEMIES_PER_WAVE = 5
-WAVE_SCALE = 3
-
-# Hazards
-HAZARD_LAVA    = "lava"
-HAZARD_ICE     = "ice"
-HAZARD_SPIKES  = "spikes"
-HAZARD_POISON  = "poison"
-
-# Layers
-LAYER_FLOOR = 0
-LAYER_WALL  = 1
-LAYER_HAZARD= 2
+DARK_BLUE = (20, 40, 120)
+GOLD = (255, 200, 0)
+PINK = (255, 100, 150)
+TEAL = (0, 180, 150)
+BROWN = (120, 70, 30)
+DARK_BROWN = (70, 40, 15)
 
 # Tile types
-T_FLOOR   = 0
-T_WALL    = 1
-T_LAVA    = 2
-T_ICE     = 3
-T_SPIKES  = 4
-T_POISON  = 5
-T_CRATE   = 6
-T_EMPTY   = 7
+TILE_FLOOR = 0
+TILE_WALL = 1
+TILE_LAVA = 2
+TILE_ICE = 3
+TILE_SPIKES = 4
+TILE_POISON = 5
+TILE_CRATE = 6
+TILE_FLOOR_ALT = 7
+TILE_WALL_ALT = 8
 
-# Boss phases
-BOSS_PHASE_COUNT = 3
+# Player
+PLAYER_SPEED = 220
+PLAYER_MAX_HP = 100
+PLAYER_DASH_SPEED = 600
+PLAYER_DASH_DURATION = 0.18
+PLAYER_DASH_COOLDOWN = 1.2
+PLAYER_FRICTION = 0.82
+PLAYER_MELEE_DAMAGE = 35
+PLAYER_MELEE_RANGE = 80
+PLAYER_MELEE_COOLDOWN = 0.5
+
+# Enemy tiers
+TIER1_HP = 30
+TIER2_HP = 80
+TIER3_HP = 200
+BOSS_HP = 800
+
+# Weapon indices
+WPN_PISTOL = 0
+WPN_SHOTGUN = 1
+WPN_SNIPER = 2
+WPN_SMG = 3
+WPN_LAUNCHER = 4
+WPN_CHAIN = 5
+WPN_BOOMERANG = 6
+WPN_FLAMETHROWER = 7
+
+# Secondary indices
+SEC_SHIELD = 0
+SEC_GRENADE = 1
+SEC_TELEPORT = 2
+SEC_TURRET = 3
+SEC_TIMESLOW = 4
+SEC_AIRSTRIKE = 5
+
+# Layers / z-order
+LAYER_FLOOR = 0
+LAYER_HAZARD = 1
+LAYER_ENTITY = 2
+LAYER_PROJECTILE = 3
+LAYER_PARTICLE = 4
+LAYER_HUD = 5
+
+# Wave config
+ENEMIES_PER_WAVE_BASE = 5
+ENEMIES_PER_WAVE_SCALE = 3
+BOSS_WAVES = [5, 10, 15]
+
+# Coin values
+COIN_SMALL = 1
+COIN_MEDIUM = 5
+COIN_LARGE = 20
+
+# HUD
+HUD_HEIGHT = 80
+MINIMAP_SIZE = 150
+MINIMAP_SCALE = 4
+
+# Particle limits
+MAX_PARTICLES = 800
+
+# Physics
+GRAVITY = 0
