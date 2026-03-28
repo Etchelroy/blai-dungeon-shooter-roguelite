@@ -1,115 +1,160 @@
-import pygame, math, random
+import pygame
+import math
+import random
 from constants import *
 
 _cache = {}
 
-def _key(*args):
-    return args
+def _make_key(*args):
+    return str(args)
 
 def get_player_surf():
-    k = "player"
-    if k not in _cache:
-        s = pygame.Surface((32,32), pygame.SRCALPHA)
-        pygame.draw.polygon(s, (80,180,80), [(16,2),(30,30),(2,30)])
-        pygame.draw.circle(s, (120,220,120), (16,12), 8)
-        _cache[k] = s
-    return _cache[k]
+    key = "player"
+    if key not in _cache:
+        surf = pygame.Surface((32, 32), pygame.SRCALPHA)
+        pygame.draw.circle(surf, (80, 160, 255), (16, 16), 14)
+        pygame.draw.circle(surf, (140, 200, 255), (16, 16), 14, 2)
+        pygame.draw.circle(surf, (200, 230, 255), (20, 12), 5)
+        _cache[key] = surf
+    return _cache[key]
 
 def get_enemy_surf(etype, size=32):
-    k = f"enemy_{etype}_{size}"
-    if k not in _cache:
-        s = pygame.Surface((size,size), pygame.SRCALPHA)
+    key = f"enemy_{etype}_{size}"
+    if key not in _cache:
+        surf = pygame.Surface((size, size), pygame.SRCALPHA)
         colors = {
-            "goblin":   (80,180,60),
-            "skeleton": (220,220,200),
-            "bat":      (100,60,140),
-            "slime":    (60,200,100),
-            "orc":      (60,140,60),
-            "mage":     (140,60,200),
-            "archer":   (180,140,60),
-            "knight":   (160,160,180),
-            "demon":    (200,40,40),
-            "golem":    (140,120,80),
+            "grunt": (220, 80, 80),
+            "speeder": (80, 220, 80),
+            "tank": (80, 80, 220),
+            "sniper": (220, 180, 80),
+            "exploder": (220, 120, 40),
+            "shield": (100, 100, 220),
+            "ghost": (180, 180, 220),
+            "swarm": (220, 220, 80),
+            "healer": (80, 220, 160),
+            "berserker": (220, 40, 40),
         }
-        c = colors.get(etype, (200,100,100))
-        pygame.draw.circle(s, c, (size//2,size//2), size//2-2)
-        pygame.draw.circle(s, (255,255,255), (size//3, size//3), size//8)
-        pygame.draw.circle(s, (255,255,255), (2*size//3, size//3), size//8)
-        _cache[k] = s
-    return _cache[k]
+        c = colors.get(etype, (180, 80, 180))
+        r = size // 2
+        pygame.draw.circle(surf, c, (r, r), r - 2)
+        pygame.draw.circle(surf, WHITE, (r, r), r - 2, 2)
+        eye_x = r + 4
+        eye_y = r - 4
+        pygame.draw.circle(surf, WHITE, (eye_x, eye_y), 4)
+        pygame.draw.circle(surf, BLACK, (eye_x + 1, eye_y), 2)
+        _cache[key] = surf
+    return _cache[key]
 
 def get_boss_surf(btype, size=80):
-    k = f"boss_{btype}_{size}"
-    if k not in _cache:
-        s = pygame.Surface((size,size), pygame.SRCALPHA)
-        colors = {"lich":(120,60,200),"dragon":(200,60,60),"titan":(80,80,200)}
-        c = colors.get(btype, (200,50,50))
-        pygame.draw.circle(s, c, (size//2,size//2), size//2-2)
-        pygame.draw.rect(s, (255,255,255), (size//4, size//3, size//2, size//6))
-        for i in range(3):
-            px = size//4 + i*(size//6)
-            pygame.draw.line(s, (255,220,0), (px, 2), (px+size//8, size//3), 3)
-        _cache[k] = s
-    return _cache[k]
+    key = f"boss_{btype}_{size}"
+    if key not in _cache:
+        surf = pygame.Surface((size, size), pygame.SRCALPHA)
+        colors = {"destroyer": (200, 40, 40), "necromancer": (120, 40, 200), "titan": (40, 120, 200)}
+        c = colors.get(btype, (200, 40, 200))
+        r = size // 2
+        pygame.draw.circle(surf, c, (r, r), r - 2)
+        pygame.draw.circle(surf, WHITE, (r, r), r - 2, 3)
+        for i in range(6):
+            angle = math.radians(i * 60)
+            sx = r + int(math.cos(angle) * (r - 8))
+            sy = r + int(math.sin(angle) * (r - 8))
+            pygame.draw.circle(surf, WHITE, (sx, sy), 5)
+        pygame.draw.circle(surf, WHITE, (r - 10, r - 8), 7)
+        pygame.draw.circle(surf, RED, (r - 10, r - 8), 5)
+        pygame.draw.circle(surf, WHITE, (r + 10, r - 8), 7)
+        pygame.draw.circle(surf, RED, (r + 10, r - 8), 5)
+        _cache[key] = surf
+    return _cache[key]
 
-def get_tile_surf(ttype):
-    k = f"tile_{ttype}"
-    if k not in _cache:
-        s = pygame.Surface((TILE, TILE))
-        palettes = {
-            T_FLOOR:  (50,45,40),
-            T_WALL:   (30,30,35),
-            T_LAVA:   (200,80,20),
-            T_ICE:    (160,210,240),
-            T_SPIKES: (80,80,90),
-            T_POISON: (40,120,40),
-            T_CRATE:  (140,90,40),
-            T_EMPTY:  (10,10,10),
-        }
-        base = palettes.get(ttype, (60,60,60))
-        s.fill(base)
-        if ttype == T_WALL:
+def get_tile_surf(tile_type):
+    key = f"tile_{tile_type}"
+    if key not in _cache:
+        surf = pygame.Surface((TILE_SIZE, TILE_SIZE))
+        if tile_type == TILE_FLOOR:
+            surf.fill((60, 55, 70))
+            for _ in range(8):
+                x = random.randint(0, TILE_SIZE - 4)
+                y = random.randint(0, TILE_SIZE - 4)
+                pygame.draw.rect(surf, (50, 45, 60), (x, y, 3, 3))
+        elif tile_type == TILE_FLOOR_ALT:
+            surf.fill((50, 65, 55))
             for _ in range(6):
-                rx = random.randint(0,TILE-4)
-                ry = random.randint(0,TILE-4)
-                pygame.draw.rect(s,(20,20,25),(rx,ry,random.randint(2,6),random.randint(2,6)))
-        elif ttype == T_FLOOR:
-            for _ in range(4):
-                rx = random.randint(0,TILE-3)
-                ry = random.randint(0,TILE-3)
-                pygame.draw.rect(s,(45,40,35),(rx,ry,random.randint(1,4),random.randint(1,4)))
-        elif ttype == T_LAVA:
+                x = random.randint(0, TILE_SIZE - 4)
+                y = random.randint(0, TILE_SIZE - 4)
+                pygame.draw.rect(surf, (40, 55, 45), (x, y, 3, 3))
+        elif tile_type == TILE_WALL:
+            surf.fill((90, 85, 100))
+            pygame.draw.rect(surf, (70, 65, 80), (2, 2, TILE_SIZE - 4, TILE_SIZE - 4))
+            pygame.draw.line(surf, (110, 105, 120), (0, 0), (TILE_SIZE, 0), 2)
+            pygame.draw.line(surf, (110, 105, 120), (0, 0), (0, TILE_SIZE), 2)
+        elif tile_type == TILE_WALL_ALT:
+            surf.fill((100, 80, 60))
+            pygame.draw.rect(surf, (80, 60, 45), (2, 2, TILE_SIZE - 4, TILE_SIZE - 4))
+        elif tile_type == TILE_LAVA:
+            surf.fill((180, 60, 20))
             for _ in range(5):
-                rx = random.randint(2,TILE-6)
-                ry = random.randint(2,TILE-6)
-                pygame.draw.circle(s,(255,160,0),(rx,ry),random.randint(2,5))
-        elif ttype == T_SPIKES:
+                x = random.randint(4, TILE_SIZE - 8)
+                y = random.randint(4, TILE_SIZE - 8)
+                pygame.draw.circle(surf, (240, 120, 30), (x, y), random.randint(3, 7))
+        elif tile_type == TILE_ICE:
+            surf.fill((160, 210, 240))
+            pygame.draw.line(surf, WHITE, (8, 8), (TILE_SIZE - 8, TILE_SIZE - 8), 2)
+            pygame.draw.line(surf, WHITE, (TILE_SIZE - 8, 8), (8, TILE_SIZE - 8), 2)
+        elif tile_type == TILE_SPIKES:
+            surf.fill((70, 65, 75))
             for i in range(3):
-                x = 6 + i*14
-                pygame.draw.polygon(s,(200,200,210),[(x,TILE-4),(x+6,TILE-4),(x+3,4)])
-        elif ttype == T_CRATE:
-            pygame.draw.rect(s,(160,110,60),(4,4,TILE-8,TILE-8),2)
-            pygame.draw.line(s,(160,110,60),(4,4),(TILE-4,TILE-4),1)
-            pygame.draw.line(s,(160,110,60),(TILE-4,4),(4,TILE-4),1)
-        _cache[k] = s
-    return _cache[k]
+                bx = 4 + i * 14
+                pts = [(bx, TILE_SIZE - 4), (bx + 6, TILE_SIZE - 4), (bx + 3, 6)]
+                pygame.draw.polygon(surf, (180, 180, 200), pts)
+        elif tile_type == TILE_POISON:
+            surf.fill((50, 100, 50))
+            for _ in range(4):
+                x = random.randint(4, TILE_SIZE - 8)
+                y = random.randint(4, TILE_SIZE - 8)
+                pygame.draw.circle(surf, (80, 180, 60), (x, y), random.randint(3, 6))
+        elif tile_type == TILE_CRATE:
+            surf.fill((140, 90, 40))
+            pygame.draw.rect(surf, (110, 70, 25), (3, 3, TILE_SIZE - 6, TILE_SIZE - 6))
+            pygame.draw.line(surf, (80, 50, 15), (TILE_SIZE // 2, 2), (TILE_SIZE // 2, TILE_SIZE - 2), 2)
+            pygame.draw.line(surf, (80, 50, 15), (2, TILE_SIZE // 2), (TILE_SIZE - 2, TILE_SIZE // 2), 2)
+            pygame.draw.rect(surf, (160, 110, 50), (0, 0, TILE_SIZE, TILE_SIZE), 2)
+        else:
+            surf.fill((80, 80, 80))
+        _cache[key] = surf
+    return _cache[key]
 
-def get_projectile_surf(color, size=8):
-    k = f"proj_{color}_{size}"
-    if k not in _cache:
-        s = pygame.Surface((size,size), pygame.SRCALPHA)
-        pygame.draw.circle(s, color, (size//2,size//2), size//2)
-        _cache[k] = s
-    return _cache[k]
+def get_projectile_surf(ptype, size=8):
+    key = f"proj_{ptype}_{size}"
+    if key not in _cache:
+        surf = pygame.Surface((size * 2, size * 2), pygame.SRCALPHA)
+        colors = {
+            "bullet": YELLOW, "pellet": ORANGE, "sniper": CYAN,
+            "rocket": ORANGE, "chain": PURPLE, "boomerang": TEAL,
+            "flame": RED, "enemy": RED, "boss": (255, 80, 80),
+        }
+        c = colors.get(ptype, WHITE)
+        pygame.draw.circle(surf, c, (size, size), size - 1)
+        pygame.draw.circle(surf, WHITE, (size, size), size - 1, 1)
+        _cache[key] = surf
+    return _cache[key]
 
-def get_coin_surf():
-    k = "coin"
-    if k not in _cache:
-        s = pygame.Surface((16,16), pygame.SRCALPHA)
-        pygame.draw.circle(s, GOLD, (8,8), 7)
-        pygame.draw.circle(s, YELLOW, (8,8), 5)
-        _cache[k] = s
-    return _cache[k]
+def get_coin_surf(coin_type):
+    key = f"coin_{coin_type}"
+    if key not in _cache:
+        sizes = {"small": 8, "medium": 12, "large": 16}
+        colors = {"small": YELLOW, "medium": GOLD, "large": ORANGE}
+        sz = sizes.get(coin_type, 10)
+        surf = pygame.Surface((sz * 2, sz * 2), pygame.SRCALPHA)
+        pygame.draw.circle(surf, colors.get(coin_type, GOLD), (sz, sz), sz - 1)
+        pygame.draw.circle(surf, WHITE, (sz, sz), sz - 1, 1)
+        _cache[key] = surf
+    return _cache[key]
 
-def clear_cache():
-    _cache.clear()
+def get_font(size=24):
+    key = f"font_{size}"
+    if key not in _cache:
+        try:
+            _cache[key] = pygame.font.SysFont("consolas", size, bold=True)
+        except:
+            _cache[key] = pygame.font.Font(None, size)
+    return _cache[key]
