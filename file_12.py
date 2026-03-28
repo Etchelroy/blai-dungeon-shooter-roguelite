@@ -6,3 +6,5 @@ class Ability:
         self.name=name; self.cooldown_max=cooldown
         self.cooldown=0.0; self.duration=duration
         self.active=False;
+# filename: src/__init__.py
+```python
