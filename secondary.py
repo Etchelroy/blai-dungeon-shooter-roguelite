@@ -2,111 +2,204 @@ import pygame
 import math
 import random
 from constants import *
-from utils import angle_to, vec_from_angle, distance
+from utils import *
 from projectiles import Projectile
-from particles import ParticleSystem
 
-class SecondaryBase:
-    def __init__(self, name, sec_id, cooldown):
-        self.name = name; self.sec_id = sec_id
-        self.cooldown = cooldown; self.timer = 0.0
-        self.active = False; self.active_timer = 0.0
-
-    def update(self, dt, player, enemies, projectiles, particles, camera):
-        self.timer = max(0, self.timer - dt)
+class SecondaryAbility:
+    def __init__(self, stype):
+        self.stype = stype
+        self.cooldown = 0.0
+        self.active = False
+        self.duration = 0.0
+        self._configs = {
+            SEC_SHIELD:    dict(cd=15.0, dur=4.0),
+            SEC_TURRET:    dict(cd=20.0, dur=8.0),
+            SEC_AIRSTRIKE: dict(cd=25.0, dur=0.0),
+            SEC_FREEZE:    dict(cd=18.0, dur=3.0),
+            SEC_VAMPIRIC:  dict(cd=12.0, dur=5.0),
+            SEC_DECOY:     dict(cd=16.0, dur=6.0),
+        }
+        c = self._configs.get(stype, dict(cd=10.0, dur=0.0))
+        self.max_cooldown = c['cd']
+        self.max_duration = c['dur']
 
     def can_use(self):
-        return self.timer <= 0
+        return self.cooldown <= 0
 
-    def use(self, player, enemies, projectiles, particles, camera):
-        pass
-
-    @property
-    def cooldown_fraction(self):
-        return 1.0 - (self.timer / self.cooldown) if self.cooldown > 0 else 1.0
-
-class Shield(SecondaryBase):
-    def __init__(self):
-        super().__init__("Shield", SEC_SHIELD, 8.0)
-        self.shield_hp = 0; self.max_shield = 80
-        self.duration = 4.0
-
-    def use(self, player, enemies, projectiles, particles, camera):
-        if not self.can_use(): return
-        self.shield_hp = self.max_shield
+    def use(self):
+        if not self.can_use():
+            return False
+        self.cooldown = self.max_cooldown
         self.active = True
-        self.active_timer = self.duration
-        self.timer = self.cooldown
-        particles.emit(player.x, player.y, CYAN, 15, speed=
-# filename: constants.py
-```python
-import pygame
+        self.duration = self.max_duration
+        return True
 
-SCREEN_W, SCREEN_H = 1280, 720
-FPS = 60
-TILE_SIZE = 48
+    def update(self, dt):
+        if self.cooldown > 0:
+            self.cooldown -= dt
+        if self.active:
+            if self.max_duration > 0:
+                self.duration -= dt
+                if self.duration <= 0:
+                    self.active = False
+            else:
+                self.active = False
 
-# Colors
-BLACK = (0, 0, 0)
-WHITE = (255, 255, 255)
-RED = (220, 50, 50)
-GREEN = (50, 220, 50)
-BLUE = (50, 50, 220)
-YELLOW = (255, 220, 0)
-ORANGE = (255, 140, 0)
-PURPLE = (160, 50, 220)
-CYAN = (0, 220, 220)
-GRAY = (120, 120, 120)
-DARK_GRAY = (60, 60, 60)
-LIGHT_GRAY = (180, 180, 180)
-DARK_RED = (140, 20, 20)
-DARK_GREEN = (20, 100, 20)
-DARK_BLUE = (20, 20, 100)
-BROWN = (139, 90, 43)
-GOLD = (255, 200, 0)
-PINK = (255, 100, 150)
-TEAL = (0, 180, 150)
+class ShieldAbility(SecondaryAbility):
+    def __init__(self):
+        super().__init__(SEC_SHIELD)
+        self.radius = 40
 
-# Player
-PLAYER_SPEED = 220
-PLAYER_FRICTION = 0.82
-PLAYER_DASH_SPEED = 600
-PLAYER_DASH_DURATION = 0.15
-PLAYER_DASH_COOLDOWN = 1.2
-PLAYER_IFRAME_DURATION = 0.3
-PLAYER_HP = 100
-PLAYER_MELEE_DAMAGE = 35
-PLAYER_MELEE_RANGE = 70
-PLAYER_MELEE_COOLDOWN = 0.5
+    def draw(self, surface, px, py, cam_offset):
+        if not self.active:
+            return
+        ox, oy = cam_offset
+        sx, sy = int(px-ox), int(py-oy)
+        alpha = int(180 * (self.duration / self.max_duration))
+        shield_surf = pygame.Surface((self.radius*2+4, self.radius*2+4), pygame.SRCALPHA)
+        pygame.draw.circle(shield_surf, (80,150,255,alpha), (self.radius+2, self.radius+2), self.radius, 3)
+        surface.blit(shield_surf, (sx-self.radius-2, sy-self.radius-2))
 
-# Weapons
-WEAPON_NAMES = [
-    "Pistol", "Shotgun", "Railgun", "Grenade Launcher",
-    "Chain Lightning", "Boomerang", "Flamethrower", "Sniper"
-]
+class TurretAbility(SecondaryAbility):
+    def __init__(self):
+        super().__init__(SEC_TURRET)
+        self.turret_x = 0
+        self.turret_y = 0
+        self.fire_timer = 0.0
+        self.fire_rate = 0.5
 
-# Enemy tiers
-TIER1 = 1
-TIER2 = 2
-TIER3 = 3
+    def use(self, x=0, y=0):
+        if not self.can_use():
+            return False
+        self.cooldown = self.max_cooldown
+        self.active = True
+        self.duration = self.max_duration
+        self.turret_x = x
+        self.turret_y = y
+        self.fire_timer = 0.0
+        return True
 
-# Layers / Z-order
-LAYER_FLOOR = 0
-LAYER_HAZARD = 1
-LAYER_CRATE = 2
-LAYER_ENEMY = 3
-LAYER_PLAYER = 4
-LAYER_PROJECTILE = 5
-LAYER_PARTICLE = 6
-LAYER_HUD = 7
+    def update_turret(self, dt, enemies, proj_manager):
+        if not self.active:
+            return
+        self.duration -= dt
+        if self.duration <= 0:
+            self.active = False
+            return
+        self.fire_timer -= dt
+        if self.fire_timer <= 0:
+            self.fire_timer = self.fire_rate
+            best = None
+            best_dist = 400
+            for e in enemies:
+                if not e.alive:
+                    continue
+                d = vec2_dist((self.turret_x, self.turret_y), (e.x, e.y))
+                if d < best_dist:
+                    best_dist = d
+                    best = e
+            if best:
+                angle = angle_to((self.turret_x, self.turret_y), (best.x, best.y))
+                vx = math.cos(angle)*500
+                vy = math.sin(angle)*500
+                proj_manager.add(Projectile(self.turret_x, self.turret_y, vx, vy, 15, 'bullet', 'player'))
 
-# Hazard types
-HAZARD_LAVA = "lava"
-HAZARD_ICE = "ice"
-HAZARD_SPIKES = "spikes"
-HAZARD_POISON = "poison"
+    def draw(self, surface, cam_offset):
+        if not self.active:
+            return
+        ox, oy = cam_offset
+        sx, sy = int(self.turret_x-ox), int(self.turret_y-oy)
+        pygame.draw.rect(surface, (80,80,80), (sx-10, sy-10, 20, 20))
+        pygame.draw.rect(surface, CYAN, (sx-10, sy-10, 20, 20), 2)
 
-# Coin values
-COIN_SMALL = 1
-COIN_MEDIUM = 5
-COIN_LARGE = 20
+class AirstrikeAbility(SecondaryAbility):
+    def __init__(self):
+        super().__init__(SEC_AIRSTRIKE)
+        self.strikes = []
+
+    def use(self, target_x=0, target_y=0):
+        if not self.can_use():
+            return False
+        self.cooldown = self.max_cooldown
+        self.strikes = []
+        for i in range(5):
+            delay = i * 0.2
+            ox = random.uniform(-80, 80)
+            oy = random.uniform(-80, 80)
+            self.strikes.append({'x': target_x+ox, 'y': target_y+oy, 'delay': delay, 'done': False})
+        self.active = True
+        return True
+
+    def update_strikes(self, dt, enemies, particles, camera):
+        if not self.active:
+            return
+        all_done = True
+        for s in self.strikes:
+            if s['done']:
+                continue
+            s['delay'] -= dt
+            all_done = False
+            if s['delay'] <= 0:
+                s['done'] = True
+                particles.emit_explosion(s['x'], s['y'], count=40)
+                camera.add_shake(8)
+                for e in enemies:
+                    if not e.alive:
+                        continue
+                    if vec2_dist((s['x'], s['y']), (e.x, e.y)) < 80:
+                        e.take_damage(45)
+        if all_done:
+            self.active = False
+
+class FreezeAbility(SecondaryAbility):
+    def __init__(self):
+        super().__init__(SEC_FREEZE)
+
+    def use(self, enemies=None):
+        if not self.can_use():
+            return False
+        self.cooldown = self.max_cooldown
+        self.active = True
+        self.duration = self.max_duration
+        if enemies:
+            for e in enemies:
+                e.freeze(self.max_duration)
+        return True
+
+class VampiricAbility(SecondaryAbility):
+    def __init__(self):
+        super().__init__(SEC_VAMPIRIC)
+        self.lifesteal = 0.3
+
+class DecoyAbility(SecondaryAbility):
+    def __init__(self):
+        super().__init__(SEC_DECOY)
+        self.decoy_x = 0
+        self.decoy_y = 0
+
+    def use(self, x=0, y=0):
+        if not self.can_use():
+            return False
+        self.cooldown = self.max_cooldown
+        self.active = True
+        self.duration = self.max_duration
+        self.decoy_x = x + random.uniform(-100, 100)
+        self.decoy_y = y + random.uniform(-100, 100)
+        return True
+
+    def draw(self, surface, cam_offset):
+        if not self.active:
+            return
+        ox, oy = cam_offset
+        sx, sy = int(self.decoy_x-ox), int(self.decoy_y-oy)
+        pygame.draw.circle(surface, (80,180,255), (sx, sy), 14, 2)
+        pygame.draw.circle(surface, (80,180,255,120), (sx, sy), 14)
+
+def make_secondary(stype):
+    if stype == SEC_SHIELD:    return ShieldAbility()
+    if stype == SEC_TURRET:    return TurretAbility()
+    if stype == SEC_AIRSTRIKE: return AirstrikeAbility()
+    if stype == SEC_FREEZE:    return FreezeAbility()
+    if stype == SEC_VAMPIRIC:  return VampiricAbility()
+    if stype == SEC_DECOY:     return DecoyAbility()
+    return SecondaryAbility(stype)
