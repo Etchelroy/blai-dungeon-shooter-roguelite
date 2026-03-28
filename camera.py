@@ -1,5 +1,5 @@
 import pygame
-from constants import *
+from constants import SCREEN_W, SCREEN_H
 from utils import lerp, clamp
 
 class Camera:
@@ -8,38 +8,40 @@ class Camera:
         self.y = 0.0
         self.target_x = 0.0
         self.target_y = 0.0
-        self.shake_intensity = 0.0
-        self.shake_timer = 0.0
-        self.ox = 0
-        self.oy = 0
+        self.shake = 0.0
+        self.shake_x = 0
+        self.shake_y = 0
 
-    def update(self, target_x, target_y, dt, map_pixel_w, map_pixel_h):
-        self.target_x = target_x - SCREEN_WIDTH // 2
-        self.target_y = target_y - SCREEN_HEIGHT // 2
-        self.x = lerp(self.x, self.target_x, min(1.0, dt * 8))
-        self.y = lerp(self.y, self.target_y, min(1.0, dt * 8))
-        max_x = max(0, map_pixel_w - SCREEN_WIDTH)
-        max_y = max(0, map_pixel_h - SCREEN_HEIGHT)
-        self.x = clamp(self.x, 0, max_x)
-        self.y = clamp(self.y, 0, max_y)
-        self.ox = 0
-        self.oy = 0
-        if self.shake_timer > 0:
-            self.shake_timer -= dt
+    def update(self, target_x, target_y, dt, world_w=0, world_h=0):
+        cx = target_x - SCREEN_W // 2
+        cy = target_y - SCREEN_H // 2
+        if world_w > SCREEN_W:
+            cx = clamp(cx, 0, world_w - SCREEN_W)
+        else:
+            cx = -(SCREEN_W - world_w) // 2
+        if world_h > SCREEN_H:
+            cy = clamp(cy, 0, world_h - SCREEN_H)
+        else:
+            cy = -(SCREEN_H - world_h) // 2
+        self.x = lerp(self.x, cx, min(1.0, dt * 8))
+        self.y = lerp(self.y, cy, min(1.0, dt * 8))
+        if self.shake > 0:
             import random
-            si = self.shake_intensity * (self.shake_timer / max(0.01, self.shake_timer + dt))
-            self.ox = random.randint(-int(si), int(si))
-            self.oy = random.randint(-int(si), int(si))
+            self.shake_x = random.uniform(-self.shake, self.shake)
+            self.shake_y = random.uniform(-self.shake, self.shake)
+            self.shake = max(0, self.shake - dt * 80)
+        else:
+            self.shake_x = 0
+            self.shake_y = 0
 
-    def shake(self, intensity=8, duration=0.3):
-        self.shake_intensity = max(self.shake_intensity, intensity)
-        self.shake_timer = max(self.shake_timer, duration)
+    def add_shake(self, amount):
+        self.shake = min(self.shake + amount, 30)
 
-    def world_to_screen(self, wx, wy):
-        return (wx - self.x + self.ox, wy - self.y + self.oy)
+    def apply(self, x, y):
+        return (x - self.x + self.shake_x, y - self.y + self.shake_y)
 
-    def screen_to_world(self, sx, sy):
-        return (sx + self.x - self.ox, sy + self.y - self.oy)
+    def world_pos(self, sx, sy):
+        return (sx + self.x - self.shake_x, sy + self.y - self.shake_y)
 
-    def get_rect(self):
-        return pygame.Rect(int(self.x), int(self.y), SCREEN_WIDTH, SCREEN_HEIGHT)
+    def get_offset(self):
+        return (int(self.x - self.shake_x), int(self.y - self.shake_y))
