@@ -226,3 +226,58 @@ class Game:
         # Dead screen
         if self.state == 'dead':
             overlay =
+Looking at the acceptance checklist, I need to create main.py and ensure all systems integrate properly. Let me also check what's needed to make everything work together.
+
+```python
+# filename: main.py
+import pygame
+import sys
+import os
+
+pygame.init()
+pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
+
+from constants import *
+from menu import Menu
+from game import Game
+
+def main():
+    screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+    pygame.display.set_caption("Dungeon Shooter Roguelite")
+    clock = pygame.time.Clock()
+    
+    state = "menu"
+    menu = Menu(screen)
+    game = None
+    
+    while True:
+        dt = clock.tick(FPS) / 1000.0
+        dt = min(dt, 0.05)
+        
+        events = pygame.event.get()
+        for event in events:
+            if event.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+        
+        if state == "menu":
+            result = menu.update(events, dt)
+            menu.draw()
+            if result == "start":
+                game = Game(screen)
+                state = "game"
+            elif result == "quit":
+                pygame.quit()
+                sys.exit()
+        elif state == "game":
+            result = game.update(events, dt)
+            game.draw()
+            if result == "menu":
+                state = "menu"
+                menu = Menu(screen)
+                game = None
+        
+        pygame.display.flip()
+
+if __name__ == "__main__":
+    main()
