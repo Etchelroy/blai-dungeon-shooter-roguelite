@@ -1,160 +1,182 @@
 import pygame
 import math
 import random
-from constants import *
-from utils import *
-from assets import get_projectile_surf
 
 class Projectile:
-    def __init__(self, x, y, vx, vy, damage, ptype='bullet', owner='player',
-                 pierce=0, aoe=0, lifetime=3.0, size=8):
-        self.x = x; self.y = y
-        self.vx = vx; self.vy = vy
+    def __init__(self, x, y, vx, vy, damage, color=(255,220,0), radius=5,
+                 pierce=False, max_pierce=1, life=120, owner="player",
+                 aoe_radius=0, slow=0, burn=0, chain=0, homing=False):
+        self.x = x
+        self.y = y
+        self.vx = vx
+        self.vy = vy
         self.damage = damage
-        self.ptype = ptype
-        self.owner = owner
+        self.color = color
+        self.radius = radius
         self.pierce = pierce
-        self.aoe = aoe
-        self.lifetime = lifetime
-        self.size = size
+        self.pierce_count = 0
+        self.max_pierce = max_pierce
+        self.life = life
         self.alive = True
-        self.hit_set = set()
-        self.surf = get_projectile_surf(ptype, size)
+        self.owner = owner
+        self.aoe_radius = aoe_radius
+        self.slow = slow
+        self.burn = burn
+        self.chain = chain
+        self.chain_count = 0
+        self.homing = homing
+        self.homing_target = None
+        self.hit_enemies = set()
+        self.trail = []
 
-    def update(self, dt, arena=None):
-        self.lifetime -= dt
-        if self.lifetime <= 0:
+    def update(self, enemies=None):
+        if self.homing and enemies:
+            best = None
+            best_dist = 300
+            for e in enemies:
+                if not e.alive:
+                    continue
+                d = math.hypot(e.x - self.x, e.y - self.y)
+                if d < best_dist:
+                    best_dist = d
+                    best = e
+            if best:
+                dx = best.x - self.x
+                dy = best.y - self.y
+                d = math.hypot(dx, dy) + 0.001
+                self.vx += (dx/d) * 0.5
+                self.vy += (dy/d) * 0.5
+                speed = math.hypot(self.vx, self.vy)
+                max_speed = 8
+                if speed > max_speed:
+                    self.vx = self.vx/speed * max_speed
+                    self.vy = self.vy/speed * max_speed
+
+        self.trail.append((self.x, self.y))
+        if len(self.trail) > 6:
+            self.trail.pop(0)
+
+        self.x += self.vx
+        self.y += self.vy
+        self.life -= 1
+        if self.life <= 0:
             self.alive = False
-            return
-        self.x += self.vx * dt
-        self.y += self.vy * dt
-        if arena and arena.is_wall_at(self.x, self.y):
-            self.alive = False
 
-    def draw(self, surface, cam_offset):
-        ox, oy = cam_offset
-        sx = int(self.x - ox)
-        sy = int(self.y - oy)
-        surface.blit(self.surf, (sx - self.size//2, sy - self.size//2))
+    def draw(self, surface, cam):
+        for i, (tx, ty) in enumerate(self.trail):
+            sx, sy = cam.apply(tx, ty)
+            alpha = (i / len(self.trail)) * 0.5
+            r, g, b = self.color
+            c = (int(r*alpha), int(g*alpha), int(b*alpha))
+            s = max(1, int(self.radius * alpha))
+            pygame.draw.circle(surface, c, (int(sx), int(sy)), s)
 
-class FlameProjectile(Projectile):
-    def __init__(self, x, y, vx, vy, damage):
-        super().__init__(x, y, vx, vy, damage, 'flame', size=10, lifetime=0.6)
-        self.dot_damage = 5
-        self.dot_duration = 2.0
+        sx, sy = cam.apply(self.x, self.y)
+        pygame.draw.circle(surface, self.color, (int(sx), int(sy)), self.radius)
 
-    def update(self, dt, arena=None):
-        self.lifetime -= dt
-        if self.lifetime <= 0:
-            self.alive = False
-            return
-        self.x += self.vx * dt
-        self.y += self.vy * dt
-        self.vx *= 0.97
-        self.vy *= 0.97
-        self.size = max(4, int(10 * self.lifetime / 0.6))
-        if arena and arena.is_wall_at(self.x, self.y):
-            self.alive = False
-
-class BoomerangProjectile(Projectile):
-    def __init__(self, x, y, vx, vy, damage, owner_ref):
-        super().__init__(x, y, vx, vy, damage, 'boomerang', size=12, lifetime=2.0)
-        self.owner_ref = owner_ref
-        self.returning = False
-        self.max_dist = 300
-        self.start_x = x
-        self.start_y = y
-        self.hit_set_return = set()
-
-    def update(self, dt, arena=None):
-        self.lifetime -= dt
-        if self.lifetime <= 0:
-            self.alive = False
-            return
-        if not self.returning:
-            dist = vec2_dist((self.start_x, self.start_y), (self.x, self.y))
-            if dist >= self.max_dist:
-                self.returning = True
-        if self.returning:
-            tx = self.owner_ref.x - self.x
-            ty = self.owner_ref.y - self.y
-            d = max(1, math.sqrt(tx*tx+ty*ty))
-            speed = 380
-            self.vx = (tx/d)*speed
-            self.vy = (ty/d)*speed
-            if d < 20:
+    def check_hit(self, entity):
+        if id(entity) in self.hit_enemies:
+            return False
+        d = math.hypot(entity.x - self.x, entity.y - self.y)
+        if d < self.radius + entity.radius:
+            self.hit_enemies.add(id(entity))
+            if not self.pierce or self.pierce_count >= self.max_pierce:
                 self.alive = False
-                return
-        self.x += self.vx * dt
-        self.y += self.vy * dt
-        if arena and arena.is_wall_at(self.x, self.y):
-            if not self.returning:
-                self.returning = True
             else:
-                self.alive = False
-
-class ChainProjectile(Projectile):
-    def __init__(self, x, y, vx, vy, damage, bounces=3):
-        super().__init__(x, y, vx, vy, damage, 'chain', size=10, lifetime=3.0)
-        self.bounces_left = bounces
-        self.chain_targets = set()
-
-    def bounce_to(self, enemies, current_target=None):
-        best = None
-        best_dist = 300
-        for e in enemies:
-            if id(e) in self.chain_targets:
-                continue
-            if not e.alive:
-                continue
-            d = vec2_dist((self.x, self.y), (e.x, e.y))
-            if d < best_dist:
-                best_dist = d
-                best = e
-        if best:
-            self.chain_targets.add(id(best))
-            angle = angle_to((self.x, self.y), (best.x, best.y))
-            speed = vec2_len((self.vx, self.vy))
-            self.vx = math.cos(angle)*speed
-            self.vy = math.sin(angle)*speed
-            self.bounces_left -= 1
+                self.pierce_count += 1
             return True
         return False
 
-class ProjectileManager:
-    def __init__(self):
-        self.projectiles = []
+class BombProjectile(Projectile):
+    def __init__(self, x, y, vx, vy, damage, aoe_radius=80):
+        super().__init__(x, y, vx, vy, damage, (255,100,0), 8, life=80, aoe_radius=aoe_radius)
+        self.fuse = 80
 
-    def add(self, proj):
-        self.projectiles.append(proj)
+    def update(self, enemies=None):
+        super().update(enemies)
+        self.fuse -= 1
+        if self.fuse <= 0:
+            self.alive = False
 
-    def update(self, dt, arena=None):
-        for p in self.projectiles:
-            p.update(dt, arena)
-        self.projectiles = [p for p in self.projectiles if p.alive]
+    def draw(self, surface, cam):
+        sx, sy = cam.apply(self.x, self.y)
+        pulse = abs(math.sin(self.fuse * 0.2))
+        r = int(255 * pulse)
+        pygame.draw.circle(surface, (r, 100, 0), (int(sx), int(sy)), self.radius)
+        pygame.draw.circle(surface, (255, 200, 0), (int(sx), int(sy)), self.radius // 2)
 
-    def check_hits(self, targets, owner_filter):
-        hits = []
-        for p in self.projectiles:
-            if not p.alive:
-                continue
-            if p.owner != owner_filter:
-                continue
-            for t in targets:
-                if not t.alive:
-                    continue
-                if id(t) in p.hit_set:
-                    continue
-                if circles_overlap(p.x, p.y, p.size//2, t.x, t.y, t.radius):
-                    hits.append((p, t))
-                    p.hit_set.add(id(t))
-                    if p.pierce <= 0:
-                        p.alive = False
-                    else:
-                        p.pierce -= 1
-        return hits
+class ReturnProjectile(Projectile):
+    def __init__(self, x, y, vx, vy, damage, owner_ref):
+        super().__init__(x, y, vx, vy, damage, (0, 220, 255), 7, life=200, pierce=True, max_pierce=99)
+        self.owner_ref = owner_ref
+        self.returning = False
+        self.out_timer = 30
 
-    def draw(self, surface, cam_offset):
-        for p in self.projectiles:
-            if p.alive:
-                p.draw(surface, cam_offset)
+    def update(self, enemies=None):
+        self.out_timer -= 1
+        if self.out_timer <= 0:
+            self.returning = True
+        if self.returning:
+            dx = self.owner_ref.x - self.x
+            dy = self.owner_ref.y - self.y
+            d = math.hypot(dx, dy) + 0.001
+            speed = 10
+            self.vx = dx/d * speed
+            self.vy = dy/d * speed
+            if d < 20:
+                self.alive = False
+        self.trail.append((self.x, self.y))
+        if len(self.trail) > 8:
+            self.trail.pop(0)
+        self.x += self.vx
+        self.y += self.vy
+        self.life -= 1
+        if self.life <= 0:
+            self.alive = False
+
+class LaserBeam:
+    def __init__(self, x, y, angle, damage, length=400, width=6, duration=30, owner="player"):
+        self.x = x
+        self.y = y
+        self.angle = angle
+        self.damage = damage
+        self.length = length
+        self.width = width
+        self.duration = duration
+        self.life = duration
+        self.alive = True
+        self.owner = owner
+        self.ex = x + math.cos(angle) * length
+        self.ey = y + math.sin(angle) * length
+        self.hit_enemies = set()
+
+    def update(self, enemies=None):
+        self.life -= 1
+        if self.life <= 0:
+            self.alive = False
+
+    def check_hit(self, entity):
+        if id(entity) in self.hit_enemies:
+            return False
+        # Line-circle intersection
+        dx = self.ex - self.x
+        dy = self.ey - self.y
+        fx = self.x - entity.x
+        fy = self.y - entity.y
+        a = dx*dx + dy*dy
+        b = 2*(fx*dx + fy*dy)
+        c = fx*fx + fy*fy - entity.radius**2
+        disc = b*b - 4*a*c
+        if disc >= 0:
+            self.hit_enemies.add(id(entity))
+            return True
+        return False
+
+    def draw(self, surface, cam):
+        sx, sy = cam.apply(self.x, self.y)
+        ex, ey = cam.apply(self.ex, self.ey)
+        alpha = self.life / self.duration
+        w = max(1, int(self.width * alpha))
+        c = (int(255*alpha), int(100*alpha), int(50*alpha))
+        pygame.draw.line(surface, c, (int(sx), int(sy)), (int(ex), int(ey)), w)
+        pygame.draw.line(surface, (255, 255, 255), (int(sx), int(sy)), (int(ex), int(ey)), max(1, w//3))
