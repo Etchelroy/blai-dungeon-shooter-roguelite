@@ -1,239 +1,254 @@
 import pygame
 import sys
 import os
-os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = '1'
+
+os.environ['SDL_AUDIODRIVER'] = 'dummy'
+
+import settings
+from settings import *
+import assets
+import menus
+import effects
+import audio
 
 pygame.init()
-pygame.mixer.init(frequency=22050, size=-16, channels=2, buffer=512)
+pygame.mixer.init()
 
-from settings import *
-from camera import Camera
-from arena import Arena
-from player import Player
-from waves import WaveManager
-from hud import HUD
-from effects import EffectManager
-from particles import ParticleSystem
-from lighting import LightingSystem
-from ui import UIManager
-from collision import SpatialHash
-from audio import AudioManager
-from projectiles import ProjectileManager
-from shop import ShopManager
-from upgrades import UpgradeManager
+screen = pygame.display.set_mode((SCREEN_W, SCREEN_H))
+pygame.display.set_caption("DUNGEON RIFT")
+clock = pygame.time.Clock()
 
-class Game:
-    def __init__(self):
-        self.screen = pygame.display.set_mode((SCREEN_W, SCREEN_H))
-        pygame.display.set_caption("INFERNO DUNGEON")
-        self.clock = pygame.time.Clock()
-        self.state = STATE_MAIN_MENU
-        self.running = True
-        self.dt = 0.0
-        self.raw_dt = 0.0
-        self.time_scale = 1.0
-        self.slow_mo_timer = 0.0
-        self.frame_surface = pygame.Surface((SCREEN_W, SCREEN_H))
-        self._init_systems()
+assets.preload_assets()
+audio.init_audio()
 
-    def _init_systems(self):
-        self.audio = AudioManager()
-        self.effects = EffectManager(self.screen)
-        self.particles = ParticleSystem()
-        self.ui = UIManager(self)
-        self.spatial_hash = SpatialHash(CELL_SIZE)
-        self.upgrade_manager = UpgradeManager()
-        self.shop_manager = ShopManager(self)
-        self.reset_game()
+class GameState:
+    MAIN_MENU = "main_menu"
+    PLAYING = "playing"
+    PAUSED = "paused"
+    DEAD = "dead"
+    SHOP = "shop"
+    CARD_SELECT = "card_select"
+    CONTROLS = "controls"
 
-    def reset_game(self):
-        self.score = 0
-        self.coins = 0
-        self.combo = 0
-        self.combo_timer = 0.0
-        self.kill_feed = []
-        self.wave_num = 0
-        self.run_stats = {
-            'kills': 0, 'damage_dealt': 0, 'damage_taken': 0,
-            'time': 0.0, 'waves': 0, 'boss_kills': 0
-        }
-        self.particles.clear()
-        self.effects.reset()
-        self.arena = Arena()
-        self.arena.generate(1)
-        self.lighting = LightingSystem(self.arena)
-        self.camera = Camera(SCREEN_W, SCREEN_H, self.arena.pixel_w, self.arena.pixel_h)
-        self.projectile_manager = ProjectileManager(self.particles, self.effects)
-        self.player = Player(
-            self.arena.spawn_x, self.arena.spawn_y,
-            self.particles, self.effects, self.projectile_manager, self.audio
-        )
-        self.camera.set_target(self.player)
-        self.wave_manager = WaveManager(self, self.arena)
-        self.hud = HUD(self)
-        self.enemies = []
-        self.bosses = []
-        self.spatial_hash.clear()
-        self.upgrade_manager.reset()
-        self.pending_powerups = []
-        self.shop_open = False
-        self.post_wave_timer = 0.0
+def run_game_session():
+    import camera, arena, tilemap, player, enemies, bosses, hud, shop as shop_mod
+    import wave_manager, particles, lighting, spatial_hash, loot, projectiles, abilities, upgrades, ui
 
-    def start_game(self):
-        self.reset_game()
-        self.state = STATE_PLAYING
-        self.wave_manager.start_wave(1)
-        self.audio.play_music('game')
+    cam = camera.Camera(SCREEN_W, SCREEN_H, ARENA_W, ARENA_H)
+    effect_manager = effects.EffectManager(screen)
+    particle_engine = particles.ParticleEngine()
+    light_engine = lighting.LightingEngine(ARENA_W, ARENA_H, TILE_SIZE_SCALED)
+    sp_hash = spatial_hash.SpatialHash(cell_size=96)
 
-    def trigger_slow_mo(self, duration=2.0, scale=0.2):
-        self.time_scale = scale
-        self.slow_mo_timer = duration
+    arena_map = arena.generate_arena()
+    tile_map = tilemap.TileMap(arena_map, particle_engine)
 
-    def add_score(self, points):
-        self.combo += 1
-        self.combo_timer = COMBO_TIMEOUT
-        multiplier = 1 + (self.combo // 5) * 0.5
-        earned = int(points * multiplier)
-        self.score += earned
-        return earned
+    p = player.Player(ARENA_W // 2, ARENA_H // 2, particle_engine, effect_manager)
+    upgrade_mgr = upgrades.UpgradeManager(p)
+    wave_mgr = wave_manager.WaveManager(p, tile_map, particle_engine, effect_manager)
+    loot_mgr = loot.LootManager(particle_engine)
+    hud_renderer = hud.HUD(screen, p, wave_mgr, tile_map)
+    shop_screen = shop_mod.Shop(screen, p, upgrade_mgr)
+    proj_pool = projectiles.ProjectilePool(particle_engine, effect_manager)
 
-    def add_kill(self, enemy_name):
-        self.run_stats['kills'] += 1
-        self.kill_feed.append({'name': enemy_name, 'timer': KILL_FEED_TIME})
-        if len(self.kill_feed) > MAX_KILL_FEED:
-            self.kill_feed.pop(0)
+    p.proj_pool = proj_pool
+    p.loot_mgr = loot_mgr
+    wave_mgr.proj_pool = proj_pool
+    wave_mgr.loot_mgr = loot_mgr
+    wave_mgr.sp_hash = sp_hash
 
-    def run(self):
-        while self.running:
-            self.raw_dt = self.clock.tick(FPS) / 1000.0
-            self.raw_dt = min(self.raw_dt, MAX_DT)
-            if self.slow_mo_timer > 0:
-                self.slow_mo_timer -= self.raw_dt
-                if self.slow_mo_timer <= 0:
-                    self.time_scale = 1.0
-                    self.slow_mo_timer = 0
-            self.dt = self.raw_dt * self.time_scale
-            self._handle_events()
-            self._update()
-            self._draw()
-        pygame.quit()
-        sys.exit()
+    font_big = pygame.font.SysFont(None, 72)
+    font_med = pygame.font.SysFont(None, 36)
 
-    def _handle_events(self):
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                self.running = False
-            elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    if self.state == STATE_PLAYING:
-                        self.state = STATE_PAUSED
-                    elif self.state == STATE_PAUSED:
-                        self.state = STATE_PLAYING
-                    elif self.state == STATE_SHOP:
-                        self.state = STATE_PLAYING
-            self.ui.handle_event(event)
-            if self.state == STATE_PLAYING:
-                self.player.handle_event(event)
+    game_surface = pygame.Surface((SCREEN_W, SCREEN_H))
+    running = True
+    state = GameState.PLAYING
+    pause_menu = menus.PauseMenu(screen)
+    card_select = None
+    dt_scale = 1.0
+    wave_trans_timer = 0.0
+    wave_trans_msg = ""
+    combo_flash_timer = 0.0
 
-    def _update(self):
-        if self.state == STATE_MAIN_MENU:
-            self.ui.update_main_menu(self.raw_dt)
-        elif self.state == STATE_PLAYING:
-            self._update_game()
-        elif self.state == STATE_PAUSED:
-            pass
-        elif self.state == STATE_SHOP:
-            self.shop_manager.update(self.raw_dt)
-        elif self.state == STATE_POWERUP:
-            pass
-        elif self.state == STATE_DEATH:
-            self.ui.update_death(self.raw_dt)
+    while running:
+        raw_dt = clock.tick(FPS) / 1000.0
+        raw_dt = min(raw_dt, 0.05)
+        dt = raw_dt * effect_manager.slow_mo_scale * dt_scale
 
-    def _update_game(self):
-        dt = self.dt
-        self.run_stats['time'] += self.raw_dt
-        if self.combo_timer > 0:
-            self.combo_timer -= dt
-            if self.combo_timer <= 0:
-                self.combo = 0
-        for kf in self.kill_feed[:]:
-            kf['timer'] -= dt
-            if kf['timer'] <= 0:
-                self.kill_feed.remove(kf)
-        self.spatial_hash.clear()
-        self.spatial_hash.insert(self.player, self.player.rect)
-        for e in self.enemies:
-            self.spatial_hash.insert(e, e.rect)
-        for b in self.bosses:
-            self.spatial_hash.insert(b, b.rect)
-        self.player.update(dt, self.arena, self.enemies + self.bosses, self.spatial_hash)
-        for e in self.enemies[:]:
-            e.update(dt, self.player, self.arena, self.particles, self.spatial_hash)
-            if e.dead:
-                pts = self.add_score(e.score_value)
-                self.coins += e.coin_drop
-                self.add_kill(e.name)
-                e.on_death(self.particles, self.effects)
-                self.run_stats['damage_dealt'] += e.max_hp
-                self.enemies.remove(e)
-        for b in self.bosses[:]:
-            b.update(dt, self.player, self.arena, self.particles, self.spatial_hash, self.projectile_manager)
-            if b.dead:
-                pts = self.add_score(b.score_value)
-                self.coins += b.coin_drop
-                self.add_kill(b.name)
-                b.on_death(self.particles, self.effects)
-                self.run_stats['boss_kills'] += 1
-                self.bosses.remove(b)
-                self.trigger_slow_mo(2.0, 0.15)
-                self.effects.screen_flash((255, 200, 50), 0.5)
-        self.projectile_manager.update(dt, self.arena, self.enemies + self.bosses, self.player, self.spatial_hash)
-        self.particles.update(dt)
-        self.lighting.update(dt, self.player, self.enemies + self.bosses)
-        self.camera.update(dt)
-        self.effects.update(dt)
-        self.arena.update(dt, self.player, self.particles, self.effects)
-        self.wave_manager.update(dt)
-        if self.player.hp <= 0:
-            self.state = STATE_DEATH
-            self.ui.init_death_screen()
-            self.audio.play_music('none')
+        events = pygame.event.get()
+        for ev in events:
+            if ev.type == pygame.QUIT:
+                return "quit"
+            if ev.type == pygame.KEYDOWN:
+                if state == GameState.PLAYING:
+                    if ev.key == pygame.K_ESCAPE:
+                        state = GameState.PAUSED
+                    p.handle_keydown(ev)
+                elif state == GameState.PAUSED:
+                    result = pause_menu.handle_event(ev)
+                    if result == "resume":
+                        state = GameState.PLAYING
+                    elif result == "quit":
+                        return "main_menu"
+                elif state == GameState.CARD_SELECT:
+                    result = card_select.handle_event(ev)
+                    if result:
+                        upgrade_mgr.apply_upgrade(result)
+                        state = GameState.PLAYING
+                        wave_mgr.start_next_wave()
+                elif state == GameState.SHOP:
+                    result = shop_screen.handle_event(ev)
+                    if result == "done":
+                        card_select = menus.CardSelectMenu(screen, upgrade_mgr.get_random_upgrades(3))
+                        state = GameState.CARD_SELECT
+            if ev.type == pygame.KEYUP:
+                if state == GameState.PLAYING:
+                    p.handle_keyup(ev)
+            if ev.type == pygame.MOUSEBUTTONDOWN:
+                if state == GameState.PLAYING:
+                    p.handle_mouse_down(ev)
+                elif state == GameState.CARD_SELECT:
+                    result = card_select.handle_mouse(ev)
+                    if result:
+                        upgrade_mgr.apply_upgrade(result)
+                        state = GameState.PLAYING
+                        wave_mgr.start_next_wave()
+                elif state == GameState.SHOP:
+                    result = shop_screen.handle_mouse(ev)
+                    if result == "done":
+                        card_select = menus.CardSelectMenu(screen, upgrade_mgr.get_random_upgrades(3))
+                        state = GameState.CARD_SELECT
+            if ev.type == pygame.MOUSEBUTTONUP:
+                if state == GameState.PLAYING:
+                    p.handle_mouse_up(ev)
 
-    def _draw(self):
-        self.frame_surface.fill(COLOR_BG)
-        if self.state == STATE_MAIN_MENU:
-            self.ui.draw_main_menu(self.frame_surface)
-        elif self.state in (STATE_PLAYING, STATE_PAUSED, STATE_SHOP, STATE_POWERUP):
-            self._draw_game()
-            if self.state == STATE_PAUSED:
-                self.ui.draw_pause(self.frame_surface)
-            elif self.state == STATE_SHOP:
-                self.shop_manager.draw(self.frame_surface)
-            elif self.state == STATE_POWERUP:
-                self.ui.draw_powerup(self.frame_surface, self.pending_powerups)
-        elif self.state == STATE_DEATH:
-            self._draw_game()
-            self.ui.draw_death(self.frame_surface)
-        elif self.state == STATE_CONTROLS:
-            self.ui.draw_controls(self.frame_surface)
-        self.effects.draw_post(self.frame_surface)
-        self.screen.blit(self.frame_surface, (0, 0))
+        if state == GameState.PLAYING:
+            mx, my = pygame.mouse.get_pos()
+            world_mx = mx + cam.offset_x
+            world_my = my + cam.offset_y
+            p.update(dt, tile_map, world_mx, world_my)
+            wave_mgr.update(dt, p, cam)
+            proj_pool.update(dt, tile_map, wave_mgr.enemies, wave_mgr.boss, p, sp_hash, loot_mgr)
+            particle_engine.update(dt)
+            loot_mgr.update(dt, p)
+            effect_manager.update(raw_dt)
+            sp_hash.clear()
+            sp_hash.insert_many(wave_mgr.enemies)
+            if wave_mgr.boss:
+                sp_hash.insert(wave_mgr.boss)
+            cam.update(p.x, p.y, dt)
+
+            if p.dead:
+                effect_manager.start_flash((255,50,50), 0.5)
+                return "dead", wave_mgr.wave_num, p.score, p.kills, p.coins
+
+            if wave_mgr.wave_cleared and not wave_mgr.boss_wave:
+                wave_mgr.wave_cleared = False
+                if wave_mgr.wave_num % 3 == 0:
+                    shop_screen.restock()
+                    state = GameState.SHOP
+                else:
+                    card_select = menus.CardSelectMenu(screen, upgrade_mgr.get_random_upgrades(3))
+                    state = GameState.CARD_SELECT
+
+            if wave_mgr.wave_trans_timer > 0:
+                wave_trans_timer = wave_mgr.wave_trans_timer
+                wave_trans_msg = wave_mgr.wave_trans_msg
+
+        game_surface.fill(BG_COLOR)
+
+        tile_map.draw(game_surface, cam)
+        loot_mgr.draw(game_surface, cam)
+        for enemy in wave_mgr.enemies:
+            enemy.draw(game_surface, cam)
+        if wave_mgr.boss:
+            wave_mgr.boss.draw(game_surface, cam)
+        proj_pool.draw(game_surface, cam)
+        p.draw(game_surface, cam)
+        particle_engine.draw(game_surface, cam)
+        light_engine.draw(game_surface, cam, tile_map, p, wave_mgr.enemies)
+
+        screen.blit(game_surface, (0, 0))
+
+        hud_renderer.draw(wave_mgr)
+        effect_manager.draw_overlay()
+
+        if wave_trans_timer > 0:
+            wave_trans_timer -= raw_dt
+            alpha = min(255, int(wave_trans_timer * 400))
+            surf = font_big.render(wave_trans_msg, True, (255, 220, 50))
+            surf.set_alpha(alpha)
+            screen.blit(surf, (SCREEN_W//2 - surf.get_width()//2, SCREEN_H//2 - 60))
+
+        if state == GameState.PAUSED:
+            pause_menu.draw()
+        elif state == GameState.CARD_SELECT:
+            card_select.draw()
+        elif state == GameState.SHOP:
+            shop_screen.draw()
+
         pygame.display.flip()
 
-    def _draw_game(self):
-        surf = self.frame_surface
-        cx, cy = self.camera.get_offset()
-        self.arena.draw(surf, cx, cy, self.camera)
-        for e in self.enemies:
-            e.draw(surf, cx, cy)
-        for b in self.bosses:
-            b.draw(surf, cx, cy)
-        self.projectile_manager.draw(surf, cx, cy)
-        self.player.draw(surf, cx, cy)
-        self.particles.draw(surf, cx, cy)
-        self.lighting.draw(surf, cx, cy)
-        self.hud.draw(surf)
+    return "quit"
 
-if __name__ == '__main__':
-    game = Game()
-    game.run()
+def main():
+    main_menu = menus.MainMenu(screen)
+    controls_menu = menus.ControlsMenu(screen)
+    death_screen = menus.DeathScreen(screen)
+    state = GameState.MAIN_MENU
+    death_stats = None
+
+    while True:
+        events = pygame.event.get()
+        for ev in events:
+            if ev.type == pygame.QUIT:
+                pygame.quit()
+                sys.exit()
+            if state == GameState.MAIN_MENU:
+                result = main_menu.handle_event(ev)
+                if result == "start":
+                    state = GameState.PLAYING
+                elif result == "controls":
+                    state = GameState.CONTROLS
+                elif result == "quit":
+                    pygame.quit()
+                    sys.exit()
+            elif state == GameState.CONTROLS:
+                result = controls_menu.handle_event(ev)
+                if result == "back":
+                    state = GameState.MAIN_MENU
+            elif state == GameState.DEAD:
+                result = death_screen.handle_event(ev)
+                if result == "restart":
+                    state = GameState.PLAYING
+                elif result == "menu":
+                    state = GameState.MAIN_MENU
+
+        if state == GameState.MAIN_MENU:
+            clock.tick(FPS)
+            main_menu.update(clock.get_time() / 1000.0)
+            main_menu.draw()
+            pygame.display.flip()
+        elif state == GameState.CONTROLS:
+            clock.tick(FPS)
+            controls_menu.draw()
+            pygame.display.flip()
+        elif state == GameState.DEAD:
+            clock.tick(FPS)
+            death_screen.update(clock.get_time() / 1000.0)
+            death_screen.draw(death_stats)
+            pygame.display.flip()
+        elif state == GameState.PLAYING:
+            result = run_game_session()
+            if result == "quit":
+                pygame.quit()
+                sys.exit()
+            elif result == "main_menu":
+                state = GameState.MAIN_MENU
+            elif isinstance(result, tuple) and result[0] == "dead":
+                death_stats = result[1:]
+                death_screen.reset()
+                state = GameState.DEAD
+
+if __name__ == "__main__":
+    main()
