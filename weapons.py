@@ -1,115 +1,119 @@
-import pygame
-import math
-import random
+import pygame, math, random
 from constants import *
-from utils import *
-from projectiles import Projectile, FlameProjectile, BoomerangProjectile, ChainProjectile
+from projectiles import Projectile, BoomerangProjectile, FlameParticle, RailBeam
+from utils import normalize, angle_to
 
-class WeaponState:
-    def __init__(self, wtype):
-        self.wtype = wtype
-        self.cooldown = 0.0
-        self.ammo = -1  # -1 = infinite
-        self.max_ammo = -1
-        self.reload_time = 0.0
-        self.reloading = False
-        self._setup()
+class WeaponSystem:
+    def __init__(self, particles):
+        self.particles = particles
+        self.current = "pistol"
+        self.inventory = ["pistol"]
+        self.ammo = {k: (v["ammo"] if v["ammo"]>0 else 9999) for k,v in WEAPONS.items()}
+        self.fire_timers = {k: 0.0 for k in WEAPONS}
+        self.heat = 0.0  # for chain gun
 
-    def _setup(self):
-        configs = {
-            WEAPON_PISTOL:      dict(cooldown=0.25, ammo=-1),
-            WEAPON_SHOTGUN:     dict(cooldown=0.7,  ammo=6, max_ammo=6, reload=1.2),
-            WEAPON_RIFLE:       dict(cooldown=0.08, ammo=30, max_ammo=30, reload=1.5),
-            WEAPON_LAUNCHER:    dict(cooldown=1.0,  ammo=4, max_ammo=4, reload=2.0),
-            WEAPON_SNIPER:      dict(cooldown=1.2,  ammo=5, max_ammo=5, reload=2.0),
-            WEAPON_FLAMETHROWER:dict(cooldown=0.05, ammo=100, max_ammo=100, reload=1.0),
-            WEAPON_CHAIN:       dict(cooldown=0.4,  ammo=-1),
-            WEAPON_BOOMERANG:   dict(cooldown=0.8,  ammo=-1),
-        }
-        c = configs.get(self.wtype, {})
-        self.fire_cooldown = c.get('cooldown', 0.3)
-        self.ammo = c.get('ammo', -1)
-        self.max_ammo = c.get('max_ammo', -1)
-        self.reload_duration = c.get('reload', 0.0)
-        self.reloading = False
-        self.reload_time = 0.0
+    def switch(self, weapon_name):
+        if weapon_name in self.inventory:
+            self.current = weapon_name
+
+    def add_weapon(self, name):
+        if name not in self.inventory:
+            self.inventory.append(name)
+            if WEAPONS[name]["ammo"] > 0:
+                self.ammo[name] = WEAPONS[name]["ammo"]
+
+    def add_ammo(self, name, amount):
+        self.ammo[name] = min(self.ammo[name]+amount, WEAPONS[name]["ammo"] if WEAPONS[name]["ammo"]>0 else 9999)
 
     def update(self, dt):
-        if self.cooldown > 0:
-            self.cooldown -= dt
-        if self.reloading:
-            self.reload_time -= dt
-            if self.reload_time <= 0:
-                self.reloading = False
-                self.ammo = self.max_ammo
+        for k in self.fire_timers:
+            if self.fire_timers[k] > 0:
+                self.fire_timers[k] -= dt
+        self.heat = max(0, self.heat-dt*2)
 
     def can_fire(self):
-        return self.cooldown <= 0 and not self.reloading and (self.ammo != 0)
+        w = WEAPONS[self.current]
+        if self.fire_timers[self.current] > 0:
+            return False
+        if self.current != "pistol" and self.ammo.get(self.current,0) <= 0:
+            return False
+        return True
 
-    def consume_ammo(self):
-        if self.ammo > 0:
-            self.ammo -= 1
-            if self.ammo == 0 and self.max_ammo > 0:
-                self.reloading = True
-                self.reload_time = self.reload_duration
+    def fire(self, px, py, tx, ty, projectiles):
+        if not self.can_fire():
+            return False
+        w = WEAPONS[self.current]
+        self.fire_timers[self.current] = w["fire_rate"]
+        if self.current != "pistol":
+            self.ammo[self.current] = max(0, self.ammo[self.current]-1)
 
-    def reload(self):
-        if self.max_ammo > 0 and not self.reloading:
-            self.reloading = True
-            self.reload_time = self.reload_duration
+        dx,dy = normalize((tx-px, ty-py))
+        spd = 700
+        angle = math.atan2(dy,dx)
+        color = w["color"]
+        wtype = w["type"]
 
-def fire_weapon(wtype, px, py, angle, proj_manager, owner_ref=None, particles=None):
-    speed_base = 500
-    if wtype == WEAPON_PISTOL:
-        vx = math.cos(angle)*speed_base
-        vy = math.sin(angle)*speed_base
-        proj_manager.add(Projectile(px, py, vx, vy, 20, 'bullet', 'player'))
+        if wtype == "single":
+            p = Projectile(px,py,dx*spd,dy*spd,w["damage"],color,6,False,"player",0,2.0)
+            projectiles.append(p)
+            self.particles.sparks(px,py,4)
 
-    elif wtype == WEAPON_SHOTGUN:
-        for i in range(7):
-            spread = random.uniform(-0.25, 0.25)
-            a = angle + spread
-            spd = random.uniform(350, 500)
-            vx = math.cos(a)*spd
-            vy = math.sin(a)*spd
-            proj_manager.add(Projectile(px, py, vx, vy, 15, 'pellet', 'player', size=7))
+        elif wtype == "pellets":
+            for i in range(7):
+                spread = random.uniform(-0.25,0.25)
+                a = angle+spread
+                vx2=math.cos(a)*500; vy2=math.sin(a)*500
+                p=Projectile(px,py,vx2,vy2,w["damage"],color,5,False,"player",0,0.6)
+                projectiles.append(p)
+            self.particles.sparks(px,py,8)
 
-    elif wtype == WEAPON_RIFLE:
-        spread = random.uniform(-0.03, 0.03)
-        a = angle + spread
-        vx = math.cos(a)*750
-        vy = math.sin(a)*750
-        proj_manager.add(Projectile(px, py, vx, vy, 18, 'bullet', 'player', pierce=1))
+        elif wtype == "pierce":
+            p=Projectile(px,py,dx*1000,dy*1000,w["damage"],color,8,True,"player",0,2.0)
+            projectiles.append(p)
+            self.particles.emit_directional(px,py,angle,0.2,CYAN,6,(200,400))
 
-    elif wtype == WEAPON_LAUNCHER:
-        vx = math.cos(angle)*300
-        vy = math.sin(angle)*300
-        p = Projectile(px, py, vx, vy, 60, 'rocket', 'player', aoe=100, size=12, lifetime=4.0)
-        proj_manager.add(p)
+        elif wtype == "aoe":
+            p=Projectile(px,py,dx*400,dy*400,w["damage"],color,10,False,"player",80,2.0)
+            projectiles.append(p)
+            self.particles.emit(px,py,RED,5,(50,150))
 
-    elif wtype == WEAPON_SNIPER:
-        vx = math.cos(angle)*1200
-        vy = math.sin(angle)*1200
-        proj_manager.add(Projectile(px, py, vx, vy, 80, 'sniper', 'player', pierce=5, size=6, lifetime=2.0))
+        elif wtype == "chain":
+            if self.heat < 3.0:
+                spread = random.uniform(-0.1,0.1)
+                a=angle+spread
+                vx2=math.cos(a)*800; vy2=math.sin(a)*800
+                p=Projectile(px,py,vx2,vy2,w["damage"],color,4,False,"player",0,1.0)
+                projectiles.append(p)
+                self.heat=min(5,self.heat+0.3)
+            else:
+                return False
 
-    elif wtype == WEAPON_FLAMETHROWER:
-        spread = random.uniform(-0.3, 0.3)
-        a = angle + spread
-        spd = random.uniform(150, 280)
-        vx = math.cos(a)*spd
-        vy = math.sin(a)*spd
-        proj_manager.add(FlameProjectile(px, py, vx, vy, 8))
-        if particles:
-            particles.emit(px, py, 2, (50,150), (255,100,0),
-                          life_range=(0.1,0.3), size=5,
-                          angle_range=(a-0.3, a+0.3))
+        elif wtype == "return":
+            vx2=dx*350; vy2=dy*350
+            p=BoomerangProjectile(px,py,vx2,vy2,w["damage"],color,"player")
+            projectiles.append(p)
 
-    elif wtype == WEAPON_CHAIN:
-        vx = math.cos(angle)*450
-        vy = math.sin(angle)*450
-        proj_manager.add(ChainProjectile(px, py, vx, vy, 25))
+        elif wtype == "cone_dot":
+            for _ in range(3):
+                spread=random.uniform(-0.4,0.4)
+                a=angle+spread
+                vx2=math.cos(a)*300+random.uniform(-30,30)
+                vy2=math.sin(a)*300+random.uniform(-30,30)
+                p=FlameParticle(px,py,vx2,vy2)
+                projectiles.append(p)
 
-    elif wtype == WEAPON_BOOMERANG:
-        vx = math.cos(angle)*380
-        vy = math.sin(angle)*380
-        proj_manager.add(BoomerangProjectile(px, py, vx, vy, 30, owner_ref))
+        elif wtype == "rail":
+            # Raycast to find endpoint
+            step=4; ex=px; ey=py
+            for _ in range(500):
+                ex+=dx*step; ey+=dy*step
+            beam=RailBeam(px,py,ex,ey,w["damage"],color)
+            projectiles.append(beam)
+            self.particles.emit_directional(px,py,angle,0.1,PURPLE,10,(300,600))
+
+        return True
+
+    def get_current_info(self):
+        w=WEAPONS[self.current]
+        ammo=self.ammo[self.current] if self.current!="pistol" else -1
+        return w["name"], ammo, w["color"]
