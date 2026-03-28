@@ -1,76 +1,187 @@
 import pygame
-from settings import TILE_PX, COLS, ROWS, ARENA_W, ARENA_H
-from assets import make_floor_tile, make_wall_tile, make_lava_tile, make_ice_tile, make_spike_tile, make_poison_tile
+import math
+import random
+from projectiles import Projectile, FlameParticle
+from constants import *
+from utils import normalize, vec_from_angle
+import assets
 
-TILE_FLOOR = 0
-TILE_WALL = 1
-TILE_LAVA = 2
-TILE_ICE = 3
-TILE_SPIKE = 4
-TILE_POISON = 5
-
-HAZARD_TILES = {TILE_LAVA, TILE_ICE, TILE_SPIKE, TILE_POISON}
-
-class Tilemap:
-    def __init__(self):
-        self.cols = COLS
-        self.rows = ROWS
-        self.tiles = [[TILE_FLOOR]*self.cols for _ in range(self.rows)]
-        self.variants = [[0]*self.cols for _ in range(self.rows)]
-        self._lava_t = 0.0
-        self._lava_surf = None
-
-    def set(self, col, row, tile_type, variant=0):
-        if 0 <= col < self.cols and 0 <= row < self.rows:
-            self.tiles[row][col] = tile_type
-            self.variants[row][col] = variant
-
-    def get(self, col, row):
-        if 0 <= col < self.cols and 0 <= row < self.rows:
-            return self.tiles[row][col]
-        return TILE_WALL
-
-    def world_to_tile(self, wx, wy):
-        return int(wx // TILE_PX), int(wy // TILE_PX)
-
-    def tile_rect(self, col, row):
-        return pygame.Rect(col*TILE_PX, row*TILE_PX, TILE_PX, TILE_PX)
-
-    def is_solid(self, col, row):
-        return self.get(col, row) == TILE_WALL
-
-    def is_solid_world(self, wx, wy):
-        return self.is_solid(*self.world_to_tile(wx, wy))
+class WeaponBase:
+    def __init__(self, name, fire_rate, ammo, max_ammo, reload_time):
+        self.name = name
+        self.fire_rate = fire_rate
+        self.ammo = ammo
+        self.max_ammo = max_ammo
+        self.reload_time = reload_time
+        self._fire_timer = 0.0
+        self._reload_timer = 0.0
+        self.reloading = False
 
     def update(self, dt):
-        self._lava_t += dt
+        if self._fire_timer > 0:
+            self._fire_timer -= dt
+        if self.reloading:
+            self._reload_timer -= dt
+            if self._reload_timer <= 0:
+                self.ammo = self.max_ammo
+                self.reloading = False
 
-    def get_tile_surf(self, tile, variant):
-        if tile == TILE_FLOOR:
-            return make_floor_tile(variant)
-        elif tile == TILE_WALL:
-            return make_wall_tile(variant)
-        elif tile == TILE_LAVA:
-            return make_lava_tile(self._lava_t)
-        elif tile == TILE_ICE:
-            return make_ice_tile()
-        elif tile == TILE_SPIKE:
-            return make_spike_tile()
-        elif tile == TILE_POISON:
-            return make_poison_tile()
-        return make_floor_tile(0)
+    def can_fire(self):
+        return self._fire_timer <= 0 and not self.reloading and self.ammo > 0
 
-    def draw(self, surface, cam_ox, cam_oy):
-        from settings import SCREEN_W, SCREEN_H
-        col0 = max(0, int(cam_ox // TILE_PX))
-        row0 = max(0, int(cam_oy // TILE_PX))
-        col1 = min(self.cols, col0 + SCREEN_W // TILE_PX + 2)
-        row1 = min(self.rows, row0 + SCREEN_H // TILE_PX + 2)
-        for row in range(row0, row1):
-            for col in range(col0, col1):
-                t = self.tiles[row][col]
-                v = self.variants[row][col]
-                surf = self.get_tile_surf(t, v)
-                sx = col*TILE_PX - int(cam_ox)
-                sy = row*TILE_PX - int(cam_oy)
-                surface.blit(surf, (sx, sy))
+    def start_reload(self):
+        if not self.reloading and self.ammo < self.max_ammo:
+            self.reloading = True
+            self._reload_timer = self.reload_time
+
+    def fire(self, x, y, angle, projectiles):
+        raise NotImplementedError
+
+    def get_info(self):
+        return f"{self.name} {self.ammo}/{self.max_ammo}"
+
+class Pistol(WeaponBase):
+    def __init__(self):
+        super().__init__("Pistol", fire_rate=0.18, ammo=15, max_ammo=15, reload_time=1.2)
+
+    def fire(self, x, y, angle, projectiles):
+        if not self.can_fire():
+            return []
+        self.ammo -= 1
+        self._fire_timer = self.fire_rate
+        spd = 520
+        vx, vy = math.cos(angle)*spd, math.sin(angle)*spd
+        p = Projectile(x, y, vx, vy, 18, "player", "bullet", lifetime=1.5)
+        projectiles.append(p)
+        return [p]
+
+class Shotgun(WeaponBase):
+    def __init__(self):
+        super().__init__("Shotgun", fire_rate=0.65, ammo=6, max_ammo=6, reload_time=1.8)
+
+    def fire(self, x, y, angle, projectiles):
+        if not self.can_fire():
+            return []
+        self.ammo -= 1
+        self._fire_timer = self.fire_rate
+        new_projs = []
+        for i in range(7):
+            spread = random.uniform(-0.25, 0.25)
+            a = angle + spread
+            spd = random.uniform(380, 480)
+            vx, vy = math.cos(a)*spd, math.sin(a)*spd
+            p = Projectile(x, y, vx, vy, 14, "player", "pellet", lifetime=0.5)
+            projectiles.append(p)
+            new_projs.append(p)
+        return new_projs
+
+class Railgun(WeaponBase):
+    def __init__(self):
+        super().__init__("Railgun", fire_rate=1.2, ammo=5, max_ammo=5, reload_time=2.0)
+
+    def fire(self, x, y, angle, projectiles):
+        if not self.can_fire():
+            return []
+        self.ammo -= 1
+        self._fire_timer = self.fire_rate
+        spd = 900
+        vx, vy = math.cos(angle)*spd, math.sin(angle)*spd
+        p = Projectile(x, y, vx, vy, 80, "player", "rail", pierce=True, lifetime=1.2)
+        projectiles.append(p)
+        return [p]
+
+class GrenadeLauncher(WeaponBase):
+    def __init__(self):
+        super().__init__("Grenade Launcher", fire_rate=0.9, ammo=4, max_ammo=4, reload_time=2.2)
+
+    def fire(self, x, y, angle, projectiles):
+        if not self.can_fire():
+            return []
+        self.ammo -= 1
+        self._fire_timer = self.fire_rate
+        spd = 280
+        vx, vy = math.cos(angle)*spd, math.sin(angle)*spd
+        p = Projectile(x, y, vx, vy, 55, "player", "grenade", aoe_radius=80, lifetime=1.8)
+        projectiles.append(p)
+        return [p]
+
+class ChainLightning(WeaponBase):
+    def __init__(self):
+        super().__init__("Chain Lightning", fire_rate=0.5, ammo=8, max_ammo=8, reload_time=1.6)
+        self.chain_range = 180
+        self.chain_count = 4
+
+    def fire(self, x, y, angle, projectiles):
+        if not self.can_fire():
+            return []
+        self.ammo -= 1
+        self._fire_timer = self.fire_rate
+        spd = 450
+        vx, vy = math.cos(angle)*spd, math.sin(angle)*spd
+        p = Projectile(x, y, vx, vy, 28, "player", "lightning", lifetime=1.0)
+        p.chain_remaining = self.chain_count
+        p.chain_range = self.chain_range
+        projectiles.append(p)
+        return [p]
+
+class Boomerang(WeaponBase):
+    def __init__(self):
+        super().__init__("Boomerang", fire_rate=1.0, ammo=1, max_ammo=1, reload_time=0.1)
+        self._out = False
+
+    def fire(self, x, y, angle, projectiles):
+        if not self.can_fire() or self._out:
+            return []
+        self.ammo -= 1
+        self._fire_timer = self.fire_rate
+        self._out = True
+        spd = 400
+        vx, vy = math.cos(angle)*spd, math.sin(angle)*spd
+        p = Projectile(x, y, vx, vy, 30, "player", "boomerang", pierce=True, lifetime=3.0)
+        p._owner_ref = None
+        p._return_x = x
+        p._return_y = y
+        p._time_out = 0.0
+        p._boomerang_owner = self
+        p.is_boomerang = True
+        projectiles.append(p)
+        return [p]
+
+    def return_boomerang(self):
+        self._out = False
+        self.ammo = self.max_ammo
+
+class Flamethrower(WeaponBase):
+    def __init__(self):
+        super().__init__("Flamethrower", fire_rate=0.05, ammo=60, max_ammo=60, reload_time=2.0)
+
+    def fire(self, x, y, angle, projectiles):
+        if not self.can_fire():
+            return []
+        self.ammo -= 1
+        self._fire_timer = self.fire_rate
+        fp = FlameParticle(x, y, angle)
+        fp.damage = 8
+        fp.owner = "player"
+        projectiles.append(fp)
+        return [fp]
+
+class Sniper(WeaponBase):
+    def __init__(self):
+        super().__init__("Sniper", fire_rate=1.5, ammo=3, max_ammo=3, reload_time=2.5)
+
+    def fire(self, x, y, angle, projectiles):
+        if not self.can_fire():
+            return []
+        self.ammo -= 1
+        self._fire_timer = self.fire_rate
+        spd = 1100
+        vx, vy = math.cos(angle)*spd, math.sin(angle)*spd
+        p = Projectile(x, y, vx, vy, 120, "player", "sniper", pierce=True, lifetime=1.0)
+        projectiles.append(p)
+        return [p]
+
+WEAPON_CLASSES = [Pistol, Shotgun, Railgun, GrenadeLauncher, ChainLightning, Boomerang, Flamethrower, Sniper]
+
+def make_weapon(idx):
+    return WEAPON_CLASSES[idx % len(WEAPON_CLASSES)]()
