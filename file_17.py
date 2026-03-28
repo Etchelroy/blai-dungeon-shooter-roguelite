@@ -161,3 +161,135 @@ class Shop:
             name_txt = self.font_md.render(item.name, True, rc)
             surf.blit(name_txt, (item.rect.x+10, item.rect.y+10))
             rarity_txt = self.font_sm.render(item.rarity.upper
+# filename: src/wave_manager.py
+```python
+import pygame
+import random
+from settings import *
+
+class WaveManager:
+    def __init__(self, game):
+        self.game = game
+        self.wave = 0
+        self.enemies_remaining = 0
+        self.enemies_to_spawn = []
+        self.spawn_timer = 0
+        self.spawn_interval = 1.5
+        self.wave_active = False
+        self.between_waves = False
+        self.between_timer = 0
+        self.between_duration = 3.0
+        self.boss_wave = False
+        self.wave_complete_callbacks = []
+        self.total_killed = 0
+
+    def start_next_wave(self):
+        self.wave += 1
+        self.between_waves = False
+        self.wave_active = True
+        self.boss_wave = (self.wave % 5 == 0)
+        self.enemies_to_spawn = self._generate_spawn_list()
+        self.enemies_remaining = len(self.enemies_to_spawn)
+        self.spawn_timer = 0
+        if hasattr(self.game, 'hud'):
+            self.game.hud.show_wave_banner(self.wave)
+
+    def _generate_spawn_list(self):
+        spawns = []
+        if self.boss_wave:
+            boss_idx = min((self.wave // 5) - 1, 2)
+            spawns.append(('boss', boss_idx))
+            return spawns
+        
+        wave = self.wave
+        count = 5 + wave * 2
+        count = min(count, 30)
+        
+        tier1 = ['grunt', 'shooter', 'rusher']
+        tier2 = ['shielder', 'bomber', 'summoner']
+        tier3 = ['phantom', 'titan', 'sniper', 'leech']
+        
+        for _ in range(count):
+            roll = random.random()
+            if wave <= 3:
+                spawns.append(('enemy', random.choice(tier1)))
+            elif wave <= 6:
+                if roll < 0.6:
+                    spawns.append(('enemy', random.choice(tier1)))
+                else:
+                    spawns.append(('enemy', random.choice(tier2)))
+            else:
+                if roll < 0.3:
+                    spawns.append(('enemy', random.choice(tier1)))
+                elif roll < 0.7:
+                    spawns.append(('enemy', random.choice(tier2)))
+                else:
+                    spawns.append(('enemy', random.choice(tier3)))
+        
+        random.shuffle(spawns)
+        return spawns
+
+    def update(self, dt):
+        if self.between_waves:
+            self.between_timer += dt
+            if self.between_timer >= self.between_duration:
+                self.start_next_wave()
+            return
+
+        if not self.wave_active:
+            return
+
+        self.spawn_timer += dt
+        if self.spawn_timer >= self.spawn_interval and self.enemies_to_spawn:
+            self.spawn_timer = 0
+            entry = self.enemies_to_spawn.pop(0)
+            self._do_spawn(entry)
+
+        alive = len([e for e in self.game.enemies if e.alive])
+        if not self.enemies_to_spawn and alive == 0 and self.wave_active:
+            self._complete_wave()
+
+    def _do_spawn(self, entry):
+        kind = entry[0]
+        pos = self._get_spawn_pos()
+        
+        if kind == 'boss':
+            boss_idx = entry[1]
+            self.game.spawn_boss(boss_idx, pos)
+        else:
+            etype = entry[1]
+            self.game.spawn_enemy(etype, pos)
+
+    def _get_spawn_pos(self):
+        arena = self.game.arena
+        player = self.game.player
+        px, py = player.x, player.y
+        
+        for _ in range(20):
+            x = random.randint(2, arena.width - 3) * TILE_SIZE * SCALE
+            y = random.randint(2, arena.height - 3) * TILE_SIZE * SCALE
+            dist = ((x - px)**2 + (y - py)**2)**0.5
+            if dist > 300:
+                tx = int(x / (TILE_SIZE * SCALE))
+                ty = int(y / (TILE_SIZE * SCALE))
+                if arena.is_walkable(tx, ty):
+                    return (x, y)
+        
+        return (px + 400, py + 400)
+
+    def _complete_wave(self):
+        self.wave_active = False
+        self.between_waves = True
+        self.between_timer = 0
+        self.game.on_wave_complete(self.wave)
+
+    def should_show_shop(self):
+        return self.wave > 0 and self.wave % 3 == 0
+
+    def get_between_progress(self):
+        return self.between_timer / self.between_duration
+
+    def force_start(self):
+        self.between_waves = False
+        self.between_timer = self.between_duration
+        self.start_next_wave()
