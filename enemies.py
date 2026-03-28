@@ -1,461 +1,444 @@
 import pygame
 import math
 import random
-from constants import *
 
-class EnemyBase:
-    tier = 1
-    def __init__(self, x, y, hp, speed, color, size=24):
-        self.x = float(x)
-        self.y = float(y)
-        self.hp = hp
-        self.max_hp = hp
-        self.speed = speed
-        self.color = color
-        self.size = size
+class BaseEnemy:
+    TIER = 1
+    NAME = "Enemy"
+    HP = 50
+    SPEED = 80
+    DAMAGE = 10
+    SCORE = 100
+    COINS = 3
+    COLOR = (200, 80, 80)
+    SIZE = 20
+
+    def __init__(self, x, y):
+        self.pos = [float(x), float(y)]
+        self.hp = self.HP
+        self.max_hp = self.HP
         self.alive = True
-        self.vx = 0.0
-        self.vy = 0.0
-        self.stun_timer = 0.0
-        self.damage_flash = 0.0
-        self.drop_coins = 1
-        self.score_value = 100
-        self.attack_timer = 0.0
-        self.attack_cooldown = 1.5
-        self.damage = 10
-        self.image = self._make_image()
-        self.angle = 0.0
-        self.knockback_x = 0.0
-        self.knockback_y = 0.0
+        self.vel = [0.0, 0.0]
+        self.rect = pygame.Rect(x - self.SIZE, y - self.SIZE, self.SIZE*2, self.SIZE*2)
+        self.state = "chase"
+        self.state_timer = 0
+        self.attack_cooldown = 0
+        self.attack_rate = 1.5
+        self.projectiles = []
+        self.flash_timer = 0
+        self.death_particles = []
+        self.on_death_called = False
+        self.status_effects = {}
 
-    def _make_image(self):
-        surf = pygame.Surface((self.size*2, self.size*2), pygame.SRCALPHA)
-        pygame.draw.circle(surf, self.color, (self.size, self.size), self.size)
-        pygame.draw.circle(surf, (255,255,255), (self.size, self.size), self.size, 2)
-        return surf
-
-    def get_rect(self):
-        return pygame.Rect(int(self.x - self.size), int(self.y - self.size), self.size*2, self.size*2)
-
-    def take_damage(self, amount, kx=0, ky=0):
+    def take_damage(self, amount, source=None):
         self.hp -= amount
-        self.damage_flash = 0.3
-        self.knockback_x = kx * 200
-        self.knockback_y = ky * 200
+        self.flash_timer = 0.1
         if self.hp <= 0:
             self.hp = 0
             self.alive = False
 
-    def stun(self, duration):
-        self.stun_timer = duration
+    def apply_status(self, status, duration, value=0):
+        self.status_effects[status] = {"timer": duration, "value": value}
 
-    def update(self, dt, player, walls, projectiles_out):
-        if self.stun_timer > 0:
-            self.stun_timer -= dt
-        if self.damage_flash > 0:
-            self.damage_flash -= dt
-        self.knockback_x *= (1 - 8*dt)
-        self.knockback_y *= (1 - 8*dt)
-        if self.attack_timer > 0:
-            self.attack_timer -= dt
+    def update_status(self, dt):
+        to_remove = []
+        for s, data in self.status_effects.items():
+            data["timer"] -= dt
+            if s == "burn" and data["timer"] > 0:
+                pass
+            if data["timer"] <= 0:
+                to_remove.append(s)
+        for s in to_remove:
+            del self.status_effects[s]
 
-        if self.stun_timer <= 0:
-            self.ai_update(dt, player, walls, projectiles_out)
+    def distance_to(self, target):
+        return math.hypot(self.pos[0]-target.pos[0], self.pos[1]-target.pos[1])
 
-        self.x += self.knockback_x * dt
-        self.y += self.knockback_y * dt
-        self._clamp_walls(walls)
-
-    def ai_update(self, dt, player, walls, projectiles_out):
-        pass
-
-    def _move_toward(self, tx, ty, dt, walls):
-        dx = tx - self.x
-        dy = ty - self.y
+    def move_toward(self, target_pos, dt, walls=None, speed_mult=1.0):
+        dx = target_pos[0] - self.pos[0]
+        dy = target_pos[1] - self.pos[1]
         dist = math.hypot(dx, dy)
-        if dist > 1:
-            nx, ny = dx/dist, dy/dist
-            old_x, old_y = self.x, self.y
-            self.x += nx * self.speed * dt
-            self.y += ny * self.speed * dt
-            if self._check_walls(walls):
-                self.x, self.y = old_x, old_y
-                # try sliding
-                self.x = old_x + nx * self.speed * dt
-                if self._check_walls(walls):
-                    self.x = old_x
-                    self.y = old_y + ny * self.speed * dt
-                    if self._check_walls(walls):
-                        self.y = old_y
-
-    def _check_walls(self, walls):
-        r = self.get_rect()
-        for w in walls:
-            if r.colliderect(w):
-                return True
-        return False
-
-    def _clamp_walls(self, walls):
-        if self._check_walls(walls):
-            pass
-
-    def draw(self, surface, camera):
-        sx = int(self.x - camera.offset_x)
-        sy = int(self.y - camera.offset_y)
-        if self.damage_flash > 0 and int(self.damage_flash*20)%2==0:
-            img = self.image.copy()
-            img.fill((255,100,100,0), special_flags=pygame.BLEND_ADD)
-            surface.blit(img, (sx - self.size, sy - self.size))
+        if dist > 0:
+            dx /= dist
+            dy /= dist
+        spd = self.SPEED * speed_mult
+        nx = self.pos[0] + dx * spd * dt
+        ny = self.pos[1] + dy * spd * dt
+        r = pygame.Rect(nx - self.SIZE, ny - self.SIZE, self.SIZE*2, self.SIZE*2)
+        blocked = False
+        if walls:
+            for w in walls:
+                if r.colliderect(w):
+                    blocked = True
+                    break
+        if not blocked:
+            self.pos[0] = nx
+            self.pos[1] = ny
         else:
-            surface.blit(self.image, (sx - self.size, sy - self.size))
-        # HP bar
-        if self.hp < self.max_hp:
-            bar_w = self.size*2
-            ratio = self.hp / self.max_hp
-            pygame.draw.rect(surface, (80,0,0), (sx - self.size, sy - self.size - 8, bar_w, 5))
-            pygame.draw.rect(surface, (220,50,50), (sx - self.size, sy - self.size - 8, int(bar_w*ratio), 5))
+            perp_x = -dy
+            perp_y = dx
+            nx2 = self.pos[0] + perp_x * spd * dt
+            ny2 = self.pos[1] + perp_y * spd * dt
+            r2 = pygame.Rect(nx2 - self.SIZE, ny2 - self.SIZE, self.SIZE*2, self.SIZE*2)
+            ok = True
+            if walls:
+                for w in walls:
+                    if r2.colliderect(w):
+                        ok = False
+                        break
+            if ok:
+                self.pos[0] = nx2
+                self.pos[1] = ny2
 
-# ---- Tier 1 ----
-class Grunt(EnemyBase):
-    tier = 1
+    def update(self, dt, player, walls=None, projectile_list=None):
+        self.rect = pygame.Rect(self.pos[0]-self.SIZE, self.pos[1]-self.SIZE, self.SIZE*2, self.SIZE*2)
+        if self.flash_timer > 0:
+            self.flash_timer -= dt
+        self.update_status(dt)
+        if self.attack_cooldown > 0:
+            self.attack_cooldown -= dt
+        self._update_ai(dt, player, walls, projectile_list)
+
+    def _update_ai(self, dt, player, walls, projectile_list):
+        self.move_toward(player.pos, dt, walls)
+        dist = self.distance_to(player)
+        if dist < self.SIZE + 16 and self.attack_cooldown <= 0:
+            player.take_damage(self.DAMAGE)
+            self.attack_cooldown = self.attack_rate
+
+    def draw(self, surface, camera_offset):
+        sx = self.pos[0] - camera_offset[0]
+        sy = self.pos[1] - camera_offset[1]
+        color = (255, 255, 255) if self.flash_timer > 0 else self.COLOR
+        pygame.draw.circle(surface, color, (int(sx), int(sy)), self.SIZE)
+        bar_w = self.SIZE * 2
+        bar_x = sx - self.SIZE
+        bar_y = sy - self.SIZE - 8
+        pygame.draw.rect(surface, (80, 0, 0), (bar_x, bar_y, bar_w, 5))
+        fill = int(bar_w * self.hp / self.max_hp)
+        pygame.draw.rect(surface, (200, 50, 50), (bar_x, bar_y, fill, 5))
+        if "burn" in self.status_effects:
+            pygame.draw.circle(surface, (255, 120, 0), (int(sx), int(sy)), self.SIZE+3, 2)
+        if "freeze" in self.status_effects:
+            pygame.draw.circle(surface, (100, 200, 255), (int(sx), int(sy)), self.SIZE+3, 2)
+        if "poison" in self.status_effects:
+            pygame.draw.circle(surface, (100, 255, 100), (int(sx), int(sy)), self.SIZE+3, 2)
+
+
+# TIER 1
+class Crawler(BaseEnemy):
+    TIER = 1
+    NAME = "Crawler"
+    HP = 40
+    SPEED = 100
+    DAMAGE = 12
+    SCORE = 80
+    COINS = 2
+    COLOR = (180, 80, 60)
+    SIZE = 16
+
+    def _update_ai(self, dt, player, walls, proj_list):
+        self.move_toward(player.pos, dt, walls)
+        dist = self.distance_to(player)
+        if dist < self.SIZE + 16 and self.attack_cooldown <= 0:
+            player.take_damage(self.DAMAGE)
+            self.attack_cooldown = 1.0
+
+
+class Shooter(BaseEnemy):
+    TIER = 1
+    NAME = "Shooter"
+    HP = 35
+    SPEED = 60
+    DAMAGE = 8
+    SCORE = 100
+    COINS = 3
+    COLOR = (180, 120, 60)
+    SIZE = 16
+    PREFERRED_DIST = 200
+
+    def _update_ai(self, dt, player, walls, proj_list):
+        dist = self.distance_to(player)
+        if dist > self.PREFERRED_DIST + 30:
+            self.move_toward(player.pos, dt, walls)
+        elif dist < self.PREFERRED_DIST - 30:
+            dx = self.pos[0] - player.pos[0]
+            dy = self.pos[1] - player.pos[1]
+            l = math.hypot(dx, dy)
+            if l > 0:
+                self.move_toward([self.pos[0]+dx/l*50, self.pos[1]+dy/l*50], dt, walls)
+        if self.attack_cooldown <= 0 and proj_list is not None and dist < 350:
+            dx = player.pos[0] - self.pos[0]
+            dy = player.pos[1] - self.pos[1]
+            l = math.hypot(dx, dy)
+            if l > 0:
+                from projectiles import EnemyProjectile
+                proj_list.append(EnemyProjectile(self.pos[0], self.pos[1], dx/l, dy/l, 180, self.DAMAGE, (220, 160, 60)))
+            self.attack_cooldown = 1.8
+
+
+class Brute(BaseEnemy):
+    TIER = 1
+    NAME = "Brute"
+    HP = 120
+    SPEED = 55
+    DAMAGE = 25
+    SCORE = 150
+    COINS = 5
+    COLOR = (160, 60, 60)
+    SIZE = 26
+
+    def _update_ai(self, dt, player, walls, proj_list):
+        dist = self.distance_to(player)
+        if self.state == "charge":
+            self.state_timer -= dt
+            self.move_toward(player.pos, dt, walls, speed_mult=2.2)
+            if self.state_timer <= 0:
+                self.state = "chase"
+                self.state_timer = 2.0
+        else:
+            self.state_timer -= dt
+            self.move_toward(player.pos, dt, walls)
+            if self.state_timer <= 0 and dist < 250:
+                self.state = "charge"
+                self.state_timer = 0.6
+        if dist < self.SIZE + 16 and self.attack_cooldown <= 0:
+            player.take_damage(self.DAMAGE)
+            self.attack_cooldown = 1.2
+
     def __init__(self, x, y):
-        super().__init__(x, y, hp=40, speed=80, color=(200, 80, 80), size=14)
-        self.drop_coins = 1
-        self.score_value = 100
-        self.damage = 8
-        self.attack_cooldown = 1.0
+        super().__init__(x, y)
+        self.state_timer = 2.0
 
-    def _make_image(self):
-        surf = pygame.Surface((self.size*2, self.size*2), pygame.SRCALPHA)
-        pygame.draw.polygon(surf, self.color, [
-            (self.size, 2), (self.size*2-2, self.size*2-2), (2, self.size*2-2)])
-        pygame.draw.polygon(surf, (255,150,150), [
-            (self.size, 2), (self.size*2-2, self.size*2-2), (2, self.size*2-2)], 2)
-        return surf
 
-    def ai_update(self, dt, player, walls, projectiles_out):
-        self._move_toward(player.x, player.y, dt, walls)
-        dist = math.hypot(player.x - self.x, player.y - self.y)
-        if dist < 30 and self.attack_timer <= 0:
-            player.take_damage(self.damage)
-            self.attack_timer = self.attack_cooldown
+# TIER 2
+class SpiderMine(BaseEnemy):
+    TIER = 2
+    NAME = "SpiderMine"
+    HP = 25
+    SPEED = 140
+    DAMAGE = 35
+    SCORE = 120
+    COINS = 4
+    COLOR = (100, 100, 180)
+    SIZE = 14
 
-class Shooter(EnemyBase):
-    tier = 1
+    def _update_ai(self, dt, player, walls, proj_list):
+        dist = self.distance_to(player)
+        self.move_toward(player.pos, dt, walls)
+        if dist < self.SIZE + 16:
+            player.take_damage(self.DAMAGE)
+            self.hp = 0
+            self.alive = False
+
+
+class Shielder(BaseEnemy):
+    TIER = 2
+    NAME = "Shielder"
+    HP = 80
+    SPEED = 65
+    DAMAGE = 15
+    SCORE = 180
+    COINS = 6
+    COLOR = (100, 150, 200)
+    SIZE = 22
+
     def __init__(self, x, y):
-        super().__init__(x, y, hp=30, speed=50, color=(80, 80, 220), size=14)
-        self.drop_coins = 1
-        self.score_value = 120
-        self.damage = 12
-        self.attack_cooldown = 2.0
-        self.preferred_range = 200
+        super().__init__(x, y)
+        self.shield_hp = 60
+        self.shield_active = True
 
-    def _make_image(self):
-        surf = pygame.Surface((self.size*2, self.size*2), pygame.SRCALPHA)
-        pygame.draw.circle(surf, self.color, (self.size, self.size), self.size)
-        pygame.draw.circle(surf, (150, 150, 255), (self.size, self.size), self.size//2)
-        pygame.draw.circle(surf, (255,255,255), (self.size, self.size), self.size, 2)
-        return surf
+    def take_damage(self, amount, source=None):
+        if self.shield_active:
+            self.shield_hp -= amount
+            self.flash_timer = 0.05
+            if self.shield_hp <= 0:
+                self.shield_active = False
+            return
+        super().take_damage(amount, source)
 
-    def ai_update(self, dt, player, walls, projectiles_out):
-        dist = math.hypot(player.x - self.x, player.y - self.y)
-        if dist > self.preferred_range + 50:
-            self._move_toward(player.x, player.y, dt, walls)
-        elif dist < self.preferred_range - 50:
-            dx = self.x - player.x
-            dy = self.y - player.y
-            d = math.hypot(dx, dy)
-            if d > 0:
-                self.x += dx/d * self.speed * dt
-                self.y += dy/d * self.speed * dt
+    def _update_ai(self, dt, player, walls, proj_list):
+        self.move_toward(player.pos, dt, walls)
+        dist = self.distance_to(player)
+        if dist < self.SIZE + 16 and self.attack_cooldown <= 0:
+            player.take_damage(self.DAMAGE)
+            self.attack_cooldown = 1.0
 
-        if self.attack_timer <= 0 and dist < 300:
-            self.attack_timer = self.attack_cooldown
-            from projectiles import EnemyProjectile
-            dx = player.x - self.x
-            dy = player.y - self.y
-            d = math.hypot(dx, dy)
-            if d > 0:
-                proj = EnemyProjectile(self.x, self.y, dx/d, dy/d, speed=200, damage=self.damage, color=(100,100,255))
-                projectiles_out.append(proj)
+    def draw(self, surface, camera_offset):
+        super().draw(surface, camera_offset)
+        if self.shield_active:
+            sx = self.pos[0] - camera_offset[0]
+            sy = self.pos[1] - camera_offset[1]
+            pygame.draw.circle(surface, (100, 180, 255), (int(sx), int(sy)), self.SIZE + 6, 3)
 
-class Charger(EnemyBase):
-    tier = 1
+
+class Summoner(BaseEnemy):
+    TIER = 2
+    NAME = "Summoner"
+    HP = 60
+    SPEED = 45
+    DAMAGE = 5
+    SCORE = 200
+    COINS = 8
+    COLOR = (180, 80, 200)
+    SIZE = 18
+
     def __init__(self, x, y):
-        super().__init__(x, y, hp=60, speed=60, color=(220, 140, 40), size=18)
-        self.drop_coins = 2
-        self.score_value = 150
-        self.damage = 20
-        self.attack_cooldown = 3.0
+        super().__init__(x, y)
+        self.summon_cooldown = 5.0
+        self.summon_timer = 2.0
+        self.max_summons = 3
+        self.summon_count = 0
+
+    def _update_ai(self, dt, player, walls, proj_list):
+        dist = self.distance_to(player)
+        if dist > 180:
+            self.move_toward(player.pos, dt, walls)
+        self.summon_timer -= dt
+        if self.summon_timer <= 0 and self.summon_count < self.max_summons:
+            self.summon_timer = self.summon_cooldown
+            from enemies import Crawler
+            angle = random.uniform(0, math.pi*2)
+            spawn_x = self.pos[0] + math.cos(angle)*60
+            spawn_y = self.pos[1] + math.sin(angle)*60
+            if proj_list is not None:
+                proj_list.append(("summon", Crawler(spawn_x, spawn_y)))
+            self.summon_count += 1
+
+    def draw(self, surface, camera_offset):
+        super().draw(surface, camera_offset)
+        sx = self.pos[0] - camera_offset[0]
+        sy = self.pos[1] - camera_offset[1]
+        t = pygame.time.get_ticks()/500
+        pygame.draw.circle(surface, (220, 100, 255),
+                          (int(sx + math.cos(t)*5), int(sy + math.sin(t)*5)), 6)
+
+
+class Sniper(BaseEnemy):
+    TIER = 2
+    NAME = "Sniper"
+    HP = 45
+    SPEED = 50
+    DAMAGE = 30
+    SCORE = 160
+    COINS = 5
+    COLOR = (200, 160, 60)
+    SIZE = 15
+
+    def __init__(self, x, y):
+        super().__init__(x, y)
+        self.charge_timer = 0
         self.charging = False
-        self.charge_vx = 0
-        self.charge_vy = 0
-        self.charge_timer = 0.0
-        self.windup_timer = 0.0
+        self.charge_duration = 1.5
+        self.target_pos = [0, 0]
 
-    def _make_image(self):
-        surf = pygame.Surface((self.size*2, self.size*2), pygame.SRCALPHA)
-        pygame.draw.ellipse(surf, self.color, (0, 4, self.size*2, self.size*2-8))
-        pygame.draw.polygon(surf, (255,200,80), [(self.size, 0),(self.size+8, 10),(self.size-8,10)])
-        return surf
-
-    def ai_update(self, dt, player, walls, projectiles_out):
+    def _update_ai(self, dt, player, walls, proj_list):
+        dist = self.distance_to(player)
+        if dist > 300:
+            self.move_toward(player.pos, dt, walls)
+        if not self.charging and self.attack_cooldown <= 0 and dist < 500:
+            self.charging = True
+            self.charge_timer = self.charge_duration
+            self.target_pos = list(player.pos)
         if self.charging:
             self.charge_timer -= dt
-            old_x, old_y = self.x, self.y
-            self.x += self.charge_vx * dt
-            self.y += self.charge_vy * dt
-            if self._check_walls(walls):
-                self.x, self.y = old_x, old_y
-                self.charging = False
-            dist = math.hypot(player.x - self.x, player.y - self.y)
-            if dist < 25:
-                player.take_damage(self.damage)
-                self.charging = False
             if self.charge_timer <= 0:
                 self.charging = False
-        elif self.windup_timer > 0:
-            self.windup_timer -= dt
-            if self.windup_timer <= 0:
-                self.charging = True
-                self.charge_timer = 0.5
-                dx = player.x - self.x
-                dy = player.y - self.y
-                d = math.hypot(dx, dy)
-                if d > 0:
-                    self.charge_vx = dx/d * 400
-                    self.charge_vy = dy/d * 400
-        else:
-            self._move_toward(player.x, player.y, dt, walls)
-            dist = math.hypot(player.x - self.x, player.y - self.y)
-            if dist < 150 and self.attack_timer <= 0:
-                self.attack_timer = self.attack_cooldown
-                self.windup_timer = 0.5
+                self.attack_cooldown = 2.5
+                if proj_list is not None:
+                    dx = self.target_pos[0] - self.pos[0]
+                    dy = self.target_pos[1] - self.pos[1]
+                    l = math.hypot(dx, dy)
+                    if l > 0:
+                        from projectiles import EnemyProjectile
+                        proj_list.append(EnemyProjectile(self.pos[0], self.pos[1],
+                                                         dx/l, dy/l, 400, self.DAMAGE,
+                                                         (255, 220, 0), pierce=True))
 
-# ---- Tier 2 ----
-class Shielder(EnemyBase):
-    tier = 2
+    def draw(self, surface, camera_offset):
+        super().draw(surface, camera_offset)
+        if self.charging:
+            sx = self.pos[0] - camera_offset[0]
+            sy = self.pos[1] - camera_offset[1]
+            tx = self.target_pos[0] - camera_offset[0]
+            ty = self.target_pos[1] - camera_offset[1]
+            alpha = int(200 * (1 - self.charge_timer/self.charge_duration))
+            pygame.draw.line(surface, (255, 220, 0, alpha), (int(sx), int(sy)), (int(tx), int(ty)), 1)
+
+
+# TIER 3
+class TankElite(BaseEnemy):
+    TIER = 3
+    NAME = "TankElite"
+    HP = 300
+    SPEED = 50
+    DAMAGE = 30
+    SCORE = 400
+    COINS = 15
+    COLOR = (180, 50, 50)
+    SIZE = 32
+
     def __init__(self, x, y):
-        super().__init__(x, y, hp=120, speed=55, color=(100, 200, 100), size=20)
-        self.drop_coins = 3
-        self.score_value = 250
-        self.damage = 15
-        self.shielded = True
-        self.shield_hp = 60
-        self.attack_cooldown = 1.5
-
-    def take_damage(self, amount, kx=0, ky=0):
-        if self.shielded:
-            self.shield_hp -= amount
-            self.damage_flash = 0.2
-            if self.shield_hp <= 0:
-                self.shielded = False
-        else:
-            super().take_damage(amount, kx, ky)
-
-    def ai_update(self, dt, player, walls, projectiles_out):
-        self._move_toward(player.x, player.y, dt, walls)
-        dist = math.hypot(player.x - self.x, player.y - self.y)
-        if dist < 35 and self.attack_timer <= 0:
-            player.take_damage(self.damage)
-            self.attack_timer = self.attack_cooldown
-
-    def draw(self, surface, camera):
-        super().draw(surface, camera)
-        if self.shielded:
-            sx = int(self.x - camera.offset_x)
-            sy = int(self.y - camera.offset_y)
-            pygame.draw.circle(surface, (100,255,100,100), (sx,sy), self.size+4, 3)
-
-class Bomber(EnemyBase):
-    tier = 2
-    def __init__(self, x, y):
-        super().__init__(x, y, hp=50, speed=70, color=(220, 80, 220), size=16)
-        self.drop_coins = 3
-        self.score_value = 200
-        self.damage = 40
-        self.attack_cooldown = 4.0
-        self.fuse_timer = -1
-
-    def _make_image(self):
-        surf = pygame.Surface((self.size*2, self.size*2), pygame.SRCALPHA)
-        pygame.draw.circle(surf, self.color, (self.size, self.size), self.size)
-        pygame.draw.circle(surf, (255,100,255), (self.size, self.size), self.size//2)
-        return surf
-
-    def ai_update(self, dt, player, walls, projectiles_out):
-        dist = math.hypot(player.x - self.x, player.y - self.y)
-        if self.fuse_timer > 0:
-            self.fuse_timer -= dt
-            if self.fuse_timer <= 0:
-                if dist < MELEE_RANGE * 2:
-                    player.take_damage(self.damage)
-                self.alive = False
-                from particles import spawn_explosion
-                spawn_explosion(self.x, self.y, (255,150,50))
-        else:
-            self._move_toward(player.x, player.y, dt, walls)
-            if dist < 50 and self.attack_timer <= 0:
-                self.fuse_timer = 1.0
-                self.attack_timer = self.attack_cooldown
-
-class Sniper(EnemyBase):
-    tier = 2
-    def __init__(self, x, y):
-        super().__init__(x, y, hp=45, speed=40, color=(80, 200, 200), size=14)
-        self.drop_coins = 3
-        self.score_value = 220
-        self.damage = 30
-        self.attack_cooldown = 3.5
-        self.aim_timer = 0.0
-        self.aiming = False
-        self.aim_target = (0, 0)
-
-    def ai_update(self, dt, player, walls, projectiles_out):
-        dist = math.hypot(player.x - self.x, player.y - self.y)
-        if not self.aiming:
-            if dist > 250:
-                self._move_toward(player.x, player.y, dt, walls)
-            if self.attack_timer <= 0:
-                self.aiming = True
-                self.aim_timer = 1.5
-                self.aim_target = (player.x, player.y)
-        else:
-            self.aim_timer -= dt
-            if self.aim_timer <= 0:
-                self.aiming = False
-                self.attack_timer = self.attack_cooldown
-                from projectiles import EnemyProjectile
-                dx = self.aim_target[0] - self.x
-                dy = self.aim_target[1] - self.y
-                d = math.hypot(dx, dy)
-                if d > 0:
-                    proj = EnemyProjectile(self.x, self.y, dx/d, dy/d, speed=400, damage=self.damage,
-                                          color=(50,255,255), piercing=True)
-                    projectiles_out.append(proj)
-
-    def draw(self, surface, camera):
-        super().draw(surface, camera)
-        if self.aiming:
-            sx = int(self.x - camera.offset_x)
-            sy = int(self.y - camera.offset_y)
-            tx = int(self.aim_target[0] - camera.offset_x)
-            ty = int(self.aim_target[1] - camera.offset_y)
-            progress = 1.0 - (self.aim_timer / 1.5)
-            color = (255, int(255*(1-progress)), 0)
-            pygame.draw.line(surface, color, (sx,sy), (tx,ty), 1)
-
-# ---- Tier 3 ----
-class Berserker(EnemyBase):
-    tier = 3
-    def __init__(self, x, y):
-        super().__init__(x, y, hp=200, speed=90, color=(220, 40, 40), size=22)
-        self.drop_coins = 5
-        self.score_value = 400
-        self.damage = 25
-        self.attack_cooldown = 0.8
+        super().__init__(x, y)
+        self.enrage_threshold = 0.4
         self.enraged = False
 
-    def take_damage(self, amount, kx=0, ky=0):
-        super().take_damage(amount, kx, ky)
-        if self.hp < self.max_hp * 0.4 and not self.enraged:
+    def _update_ai(self, dt, player, walls, proj_list):
+        if self.hp / self.max_hp < self.enrage_threshold and not self.enraged:
             self.enraged = True
-            self.speed = 150
-            self.damage = 40
+        spd = 2.0 if self.enraged else 1.0
+        self.move_toward(player.pos, dt, walls, speed_mult=spd)
+        dist = self.distance_to(player)
+        if dist < self.SIZE + 20 and self.attack_cooldown <= 0:
+            player.take_damage(self.DAMAGE)
+            self.attack_cooldown = 0.8
+        if self.attack_cooldown <= 0 and dist < 300 and proj_list is not None:
+            if random.random() < 0.02:
+                for angle in [0, math.pi/2, math.pi, 3*math.pi/2]:
+                    from projectiles import EnemyProjectile
+                    proj_list.append(EnemyProjectile(self.pos[0], self.pos[1],
+                                                    math.cos(angle), math.sin(angle),
+                                                    150, 15, (200, 80, 80)))
 
-    def _make_image(self):
-        surf = pygame.Surface((self.size*2, self.size*2), pygame.SRCALPHA)
-        pygame.draw.polygon(surf, self.color, [
-            (self.size, 0), (self.size*2, self.size), (self.size*2-4, self.size*2),
-            (4, self.size*2), (0, self.size)])
+    def draw(self, surface, camera_offset):
+        super().draw(surface, camera_offset)
         if self.enraged:
-            pygame.draw.polygon(surf, (255,100,0), [
-                (self.size, 0), (self.size*2, self.size), (self.size*2-4, self.size*2),
-                (4, self.size*2), (0, self.size)], 3)
-        return surf
+            sx = self.pos[0] - camera_offset[0]
+            sy = self.pos[1] - camera_offset[1]
+            pygame.draw.circle(surface, (255, 50, 0), (int(sx), int(sy)), self.SIZE+4, 3)
 
-    def ai_update(self, dt, player, walls, projectiles_out):
-        self.image = self._make_image()
-        self._move_toward(player.x, player.y, dt, walls)
-        dist = math.hypot(player.x - self.x, player.y - self.y)
-        if dist < 35 and self.attack_timer <= 0:
-            player.take_damage(self.damage)
-            self.attack_timer = self.attack_cooldown
 
-class Summoner(EnemyBase):
-    tier = 3
-    def __init__(self, x, y):
-        super().__init__(x, y, hp=150, speed=30, color=(180, 100, 220), size=22)
-        self.drop_coins = 6
-        self.score_value = 500
-        self.damage = 8
-        self.attack_cooldown = 5.0
-        self.summon_count = 0
-        self.max_summons = 4
+class PoisonSpitter(BaseEnemy):
+    TIER = 3
+    NAME = "PoisonSpitter"
+    HP = 80
+    SPEED = 70
+    DAMAGE = 5
+    SCORE = 300
+    COINS = 10
+    COLOR = (80, 180, 80)
+    SIZE = 20
 
-    def _make_image(self):
-        surf = pygame.Surface((self.size*2, self.size*2), pygame.SRCALPHA)
-        for i in range(8):
-            a = i * math.pi/4
-            pygame.draw.line(surf, self.color,
-                (self.size + math.cos(a)*8, self.size + math.sin(a)*8),
-                (self.size + math.cos(a)*self.size, self.size + math.sin(a)*self.size), 2)
-        pygame.draw.circle(surf, self.color, (self.size, self.size), 10)
-        return surf
+    def _update_ai(self, dt, player, walls, proj_list):
+        dist = self.distance_to(player)
+        if dist > 200:
+            self.move_toward(player.pos, dt, walls)
+        if self.attack_cooldown <= 0 and dist < 280 and proj_list is not None:
+            for i in range(5):
+                angle = math.atan2(player.pos[1]-self.pos[1], player.pos[0]-self.pos[0])
+                angle += random.uniform(-0.4, 0.4)
+                from projectiles import EnemyProjectile
+                proj_list.append(EnemyProjectile(self.pos[0], self.pos[1],
+                                                math.cos(angle), math.sin(angle),
+                                                160, self.DAMAGE, (80, 220, 80),
+                                                poison=True))
+            self.attack_cooldown = 2.0
 
-    def ai_update(self, dt, player, walls, projectiles_out):
-        self._move_toward(player.x, player.y, dt, walls)
-        if self.attack_timer <= 0 and self.summon_count < self.max_summons:
-            self.attack_timer = self.attack_cooldown
-            return True  # signal to spawn grunt
-        return False
 
-    def update(self, dt, player, walls, projectiles_out):
-        super().update(dt, player, walls, projectiles_out)
-        if self.stun_timer <= 0:
-            result = self.ai_update(dt, player, walls, projectiles_out)
-            if result:
-                offset = random.choice([(60,0),(-60,0),(0,60),(0,-60)])
-                g = Grunt(self.x + offset[0], self.y + offset[1])
-                projectiles_out.append(('spawn_enemy', g))
-                self.summon_count += 1
-
-class Necromancer(EnemyBase):
-    tier = 3
-    def __init__(self, x, y):
-        super().__init__(x, y, hp=180, speed=35, color=(60, 80, 160), size=24)
-        self.drop_coins = 7
-        self.score_value = 600
-        self.damage = 18
-        self.attack_cooldown = 2.0
-        self.phase = 0
-        self.teleport_timer = 8.0
-
-    def _make_image(self):
-        surf = pygame.Surface((self.size*2, self.size*2), pygame.SRCALPHA)
-        pygame.draw.ellipse(surf, self.color, (0, self.size//2, self.size*2, self.size + self.size//2))
-        pygame.draw.ellipse(surf, (100,120,220), (4, self.size//2+4, self.size*2-8, self.size-4))
-        return surf
-
-    def ai_update(self, dt, player, walls, projectiles_out):
-        self.teleport_timer -= dt
-        if self.teleport_timer <= 0:
-            self.teleport_timer = 8.0
-            self.x += random.uniform(-200, 200)
-            self.y += random.uniform(-200, 200)
-
-        if self.attack_timer <= 0:
-            self.attack_timer = self.attack_cooldown
-            from projectiles import EnemyProjectile
-            for i in range(3):
-                dx = player.x - self.x
-                dy = player.y - self.y
-                a = math.atan2(dy, dx) + (i-1) * 0.3
-                proj = EnemyProjectile(self.x, self.y, math.cos(a), math.sin(a),
-                                      speed=180, damage=self.damage, color=(80,80,220))
-                projectiles_out.append(proj)
-
-ENEMY_TYPES = [Grunt, Shooter, Charger, Shielder, Bomber, Sniper, Berserker, Summoner, Necromancer]
-TIER1_ENEMIES = [Grunt, Shooter, Charger]
-TIER2_ENEMIES = [Shielder, Bomber, Sniper]
-TIER3_ENEMIES = [Berserker, Summoner, Necromancer]
+class Teleporter(BaseEnemy):
+    TIER = 3
+    NAME = "Teleporter"
+    HP = 70
+    SPEED = 90
+    DAMAGE = 20
+    SCORE =
