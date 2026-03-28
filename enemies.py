@@ -442,3 +442,294 @@ class Teleporter(BaseEnemy):
     SPEED = 90
     DAMAGE = 20
     SCORE =
+Looking at the acceptance checklist, I need to implement the remaining systems. Let me write the missing files.
+
+```python
+# filename: abilities.py
+import pygame
+import math
+import random
+
+class SecondaryAbility:
+    def __init__(self, name, cooldown):
+        self.name = name
+        self.cooldown = cooldown
+        self.timer = 0
+        self.active = False
+        self.duration = 0
+        self.duration_timer = 0
+
+    def update(self, dt):
+        if self.timer > 0:
+            self.timer -= dt
+        if self.active and self.duration > 0:
+            self.duration_timer -= dt
+            if self.duration_timer <= 0:
+                self.active = False
+
+    def is_ready(self):
+        return self.timer <= 0
+
+    def activate(self, player, enemies, projectiles, particles):
+        if not self.is_ready():
+            return False
+        self.timer = self.cooldown
+        self._do_activate(player, enemies, projectiles, particles)
+        return True
+
+    def _do_activate(self, player, enemies, projectiles, particles):
+        pass
+
+    def get_cooldown_ratio(self):
+        return max(0, self.timer / self.cooldown)
+
+
+class ShieldAbility(SecondaryAbility):
+    def __init__(self):
+        super().__init__("Shield", 8.0)
+        self.duration = 3.0
+        self.shield_hp = 0
+
+    def _do_activate(self, player, enemies, projectiles, particles):
+        self.active = True
+        self.duration_timer = self.duration
+        self.shield_hp = 50
+        player.shield_active = True
+        player.shield_hp = self.shield_hp
+        for _ in range(20):
+            from particles import Particle
+            angle = random.uniform(0, math.pi * 2)
+            p = Particle(player.pos[0], player.pos[1],
+                        math.cos(angle) * 60, math.sin(angle) * 60,
+                        (100, 150, 255), random.uniform(0.3, 0.6), 6)
+            particles.append(p)
+
+    def update(self, dt):
+        super().update(dt)
+        if not self.active and hasattr(self, '_player_ref'):
+            pass
+
+
+class GrenadeAbility(SecondaryAbility):
+    def __init__(self):
+        super().__init__("Grenade", 5.0)
+
+    def _do_activate(self, player, enemies, projectiles, particles):
+        from projectiles import Projectile
+        mx, my = pygame.mouse.get_pos()
+        # Convert screen to world
+        cx = player.pos[0] - 640
+        cy = player.pos[1] - 360
+        wx = mx + cx
+        wy = my + cy
+        dx = wx - player.pos[0]
+        dy = wy - player.pos[1]
+        dist = math.hypot(dx, dy) or 1
+        proj = Projectile(player.pos[0], player.pos[1],
+                         dx/dist * 300, dy/dist * 300,
+                         (255, 140, 0), 10, 80, pierce=True, is_grenade=True)
+        projectiles.append(proj)
+
+
+class TeleportAbility(SecondaryAbility):
+    def __init__(self):
+        super().__init__("Teleport", 6.0)
+
+    def _do_activate(self, player, enemies, projectiles, particles):
+        from particles import Particle
+        # Spawn afterimage at old pos
+        for _ in range(15):
+            angle = random.uniform(0, math.pi * 2)
+            speed = random.uniform(20, 80)
+            p = Particle(player.pos[0], player.pos[1],
+                        math.cos(angle)*speed, math.sin(angle)*speed,
+                        (180, 0, 255), random.uniform(0.3, 0.8), 5)
+            particles.append(p)
+        mx, my = pygame.mouse.get_pos()
+        cx = player.pos[0] - 640
+        cy = player.pos[1] - 360
+        wx = mx + cx
+        wy = my + cy
+        player.pos[0] = wx
+        player.pos[1] = wy
+        for _ in range(15):
+            angle = random.uniform(0, math.pi * 2)
+            speed = random.uniform(20, 80)
+            p = Particle(player.pos[0], player.pos[1],
+                        math.cos(angle)*speed, math.sin(angle)*speed,
+                        (255, 100, 255), random.uniform(0.3, 0.8), 5)
+            particles.append(p)
+
+
+class AdrenalineAbility(SecondaryAbility):
+    def __init__(self):
+        super().__init__("Adrenaline", 12.0)
+        self.duration = 5.0
+        self.boost_active = False
+
+    def _do_activate(self, player, enemies, projectiles, particles):
+        self.active = True
+        self.boost_active = True
+        self.duration_timer = self.duration
+        player.speed_mult = 2.0
+        player.damage_mult = 2.0
+        from particles import Particle
+        for _ in range(20):
+            angle = random.uniform(0, math.pi * 2)
+            p = Particle(player.pos[0], player.pos[1],
+                        math.cos(angle)*80, math.sin(angle)*80,
+                        (255, 50, 50), random.uniform(0.4, 0.8), 7)
+            particles.append(p)
+
+    def update(self, dt):
+        super().update(dt)
+        if self.boost_active and not self.active:
+            self.boost_active = False
+            # Reset handled in player update
+
+
+class MineAbility(SecondaryAbility):
+    def __init__(self):
+        super().__init__("Mine", 4.0)
+        self.mines = []
+
+    def _do_activate(self, player, enemies, projectiles, particles):
+        mine = {'pos': [player.pos[0], player.pos[1]], 'radius': 80,
+                'damage': 60, 'armed': False, 'arm_timer': 1.0, 'triggered': False}
+        self.mines.append(mine)
+
+    def update_mines(self, enemies, particles, dt):
+        for mine in self.mines[:]:
+            if not mine['armed']:
+                mine['arm_timer'] -= dt
+                if mine['arm_timer'] <= 0:
+                    mine['armed'] = True
+                continue
+            for enemy in enemies:
+                ex, ey = enemy.pos
+                dist = math.hypot(ex - mine['pos'][0], ey - mine['pos'][1])
+                if dist < mine['radius']:
+                    mine['triggered'] = True
+                    break
+            if mine['triggered']:
+                from particles import Particle
+                for _ in range(30):
+                    angle = random.uniform(0, math.pi * 2)
+                    speed = random.uniform(50, 200)
+                    p = Particle(mine['pos'][0], mine['pos'][1],
+                                math.cos(angle)*speed, math.sin(angle)*speed,
+                                (255, 200, 0), random.uniform(0.4, 1.0), 8)
+                    particles.append(p)
+                for enemy in enemies:
+                    dist = math.hypot(enemy.pos[0]-mine['pos'][0],
+                                     enemy.pos[1]-mine['pos'][1])
+                    if dist < mine['radius']:
+                        enemy.take_damage(mine['damage'])
+                self.mines.remove(mine)
+
+    def draw_mines(self, surface, camera):
+        for mine in self.mines:
+            sx, sy = camera.world_to_screen(mine['pos'][0], mine['pos'][1])
+            color = (255, 100, 0) if mine['armed'] else (150, 150, 150)
+            pygame.draw.circle(surface, color, (int(sx), int(sy)), 8)
+            pygame.draw.circle(surface, (255, 255, 0), (int(sx), int(sy)), 8, 2)
+
+
+class SummonAbility(SecondaryAbility):
+    def __init__(self):
+        super().__init__("Summon", 15.0)
+        self.allies = []
+
+    def _do_activate(self, player, enemies, projectiles, particles):
+        for i in range(2):
+            angle = random.uniform(0, math.pi * 2)
+            ax = player.pos[0] + math.cos(angle) * 50
+            ay = player.pos[1] + math.sin(angle) * 50
+            ally = SummonedAlly(ax, ay)
+            self.allies.append(ally)
+        from particles import Particle
+        for _ in range(20):
+            angle = random.uniform(0, math.pi * 2)
+            p = Particle(player.pos[0], player.pos[1],
+                        math.cos(angle)*60, math.sin(angle)*60,
+                        (0, 200, 100), random.uniform(0.5, 1.0), 6)
+            particles.append(p)
+
+    def update_allies(self, enemies, particles, dt):
+        for ally in self.allies[:]:
+            ally.update(enemies, particles, dt)
+            if ally.hp <= 0:
+                self.allies.remove(ally)
+
+    def draw_allies(self, surface, camera):
+        for ally in self.allies:
+            ally.draw(surface, camera)
+
+
+class SummonedAlly:
+    def __init__(self, x, y):
+        self.pos = [x, y]
+        self.hp = 30
+        self.max_hp = 30
+        self.speed = 150
+        self.damage = 15
+        self.attack_timer = 0
+        self.attack_cd = 1.0
+        self.lifetime = 15.0
+
+    def update(self, enemies, particles, dt):
+        self.lifetime -= dt
+        if self.lifetime <= 0:
+            self.hp = 0
+            return
+        self.attack_timer -= dt
+        target = None
+        best = 300
+        for e in enemies:
+            d = math.hypot(e.pos[0]-self.pos[0], e.pos[1]-self.pos[1])
+            if d < best:
+                best = d
+                target = e
+        if target:
+            dx = target.pos[0] - self.pos[0]
+            dy = target.pos[1] - self.pos[1]
+            dist = math.hypot(dx, dy) or 1
+            if dist > 40:
+                self.pos[0] += dx/dist * self.speed * dt
+                self.pos[1] += dy/dist * self.speed * dt
+            elif self.attack_timer <= 0:
+                target.take_damage(self.damage)
+                self.attack_timer = self.attack_cd
+                from particles import Particle
+                for _ in range(5):
+                    p = Particle(self.pos[0], self.pos[1],
+                                random.uniform(-50,50), random.uniform(-50,50),
+                                (0, 255, 100), 0.3, 4)
+                    particles.append(p)
+
+    def draw(self, surface, camera):
+        sx, sy = camera.world_to_screen(self.pos[0], self.pos[1])
+        pygame.draw.circle(surface, (0, 200, 100), (int(sx), int(sy)), 12)
+        pygame.draw.circle(surface, (0, 255, 150), (int(sx), int(sy)), 12, 2)
+        bar_w = 24
+        ratio = self.hp / self.max_hp
+        pygame.draw.rect(surface, (100,0,0), (int(sx)-12, int(sy)-18, bar_w, 4))
+        pygame.draw.rect(surface, (0,200,0), (int(sx)-12, int(sy)-18, int(bar_w*ratio), 4))
+
+
+def create_ability(name):
+    mapping = {
+        'shield': ShieldAbility,
+        'grenade': GrenadeAbility,
+        'teleport': TeleportAbility,
+        'adrenaline': AdrenalineAbility,
+        'mine': MineAbility,
+        'summon': SummonAbility,
+    }
+    cls = mapping.get(name.lower())
+    if cls:
+        return cls()
+    return None
+
+
+ALL_ABILITIES = ['shield', 'grenade', 'teleport', 'adrenaline', 'mine', 'summon']
