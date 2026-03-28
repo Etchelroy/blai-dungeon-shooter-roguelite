@@ -64,3 +64,51 @@ class ParticleSystem:
 
     def emit_blood(self, x, y, count=12):
         self.emit_burst(x, y,
+I'll build the remaining files systematically. Let me implement all the missing components.
+
+```python
+# filename: camera.py
+import pygame
+from settings import *
+
+class Camera:
+    def __init__(self):
+        self.x = 0.0
+        self.y = 0.0
+        self.target_x = 0.0
+        self.target_y = 0.0
+        self.shake_intensity = 0.0
+        self.shake_duration = 0.0
+        self.shake_x = 0
+        self.shake_y = 0
+        self.lerp_speed = 8.0
+
+    def update(self, target_x, target_y, dt):
+        self.target_x = target_x - VIEWPORT_W / 2
+        self.target_y = target_y - VIEWPORT_H / 2
+        self.target_x = max(0, min(self.target_x, ARENA_W - VIEWPORT_W))
+        self.target_y = max(0, min(self.target_y, ARENA_H - VIEWPORT_H))
+        self.x += (self.target_x - self.x) * self.lerp_speed * dt
+        self.y += (self.target_y - self.y) * self.lerp_speed * dt
+        if self.shake_duration > 0:
+            self.shake_duration -= dt
+            import random
+            s = self.shake_intensity * (self.shake_duration / max(self.shake_duration + 0.01, 0.3))
+            self.shake_x = random.randint(-int(s), int(s))
+            self.shake_y = random.randint(-int(s), int(s))
+        else:
+            self.shake_x = 0
+            self.shake_y = 0
+
+    def shake(self, intensity, duration):
+        self.shake_intensity = intensity
+        self.shake_duration = duration
+
+    def world_to_screen(self, wx, wy):
+        return (wx - self.x + self.shake_x, wy - self.y + self.shake_y)
+
+    def screen_to_world(self, sx, sy):
+        return (sx + self.x - self.shake_x, sy + self.y - self.shake_y)
+
+    def get_rect(self):
+        return pygame.Rect(int(self.x), int(self.y), VIEWPORT_W, VIEWPORT_H)
