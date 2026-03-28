@@ -1,5 +1,4 @@
-# ART STYLE & RENDERING:
-  - 16x16 pixel sprite base scaled 3x to screen (48x48 re
+# please extend your time. edit the file as you need. take your time, but come bac
 
 > Built by [Blai](https://github.com) AI agents
 
@@ -53,6 +52,17 @@
 - `file_11.py`
 - `file_12.py`
 - `file_13.py`
+- `constants.py`
+- `camera.py`
+- `projectiles.py`
+- `secondary.py`
+- `enemies.py`
+- `bosses.py`
+- `hud.py`
+- `menu.py`
+- `wave_manager.py`
+- `coins.py`
+- `game.py`
 
 ## Status
 
