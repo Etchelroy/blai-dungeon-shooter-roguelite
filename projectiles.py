@@ -1,134 +1,173 @@
-import pygame
-import math
-import random
+import pygame, math, random
 from constants import *
-from utils import normalize, distance, angle_to, vec_from_angle
+from utils import normalize, dist
 
 class Projectile:
-    def __init__(self, x, y, vx, vy, damage, owner="player", proj_type="bullet",
-                 pierce=False, size=8, lifetime=3.0, color=YELLOW):
-        self.x = x; self.y = y; self.vx = vx; self.vy = vy
-        self.damage = damage; self.owner = owner; self.proj_type = proj_type
-        self.pierce = pierce; self.size = size; self.lifetime = lifetime
-        self.color = color; self.alive = True
-        self.hit_enemies = set()
-        self.homing = False; self.homing_strength = 0
-        self.homing_target = None
-        self.chain_count = 0; self.max_chain = 0
-        self.is_boomerang = False; self.return_phase = False
-        self.origin_x = x; self.origin_y = y
-        self.aoe_radius = 0; self.aoe_damage = 0
-        self.dot_damage = 0; self.dot_duration = 0
+    def __init__(self, x, y, vx, vy, damage, color, size=6, piercing=False, owner="player",
+                 aoe_radius=0, lifetime=3.0, homing=False, homing_target=None):
+        self.x=x; self.y=y; self.vx=vx; self.vy=vy
+        self.damage=damage; self.color=color; self.size=size
+        self.piercing=piercing; self.owner=owner
+        self.aoe_radius=aoe_radius; self.lifetime=lifetime
+        self.homing=homing; self.homing_target=homing_target
+        self.alive=True
+        self.hit_enemies=set()
+        self.trail=[]
 
-    def update(self, dt, walls, enemies, player, particles):
-        if not self.alive:
-            return
+    def update(self, dt, walls, enemies=None):
         self.lifetime -= dt
         if self.lifetime <= 0:
-            if self.aoe_radius > 0:
-                self._explode(enemies, particles)
             self.alive = False
             return
 
-        if self.homing and self.homing_target and self.homing_target.alive:
-            tx, ty = self.homing_target.x, self.homing_target.y
-            desired_angle = angle_to((self.x, self.y), (tx, ty))
-            current_angle = math.atan2(self.vy, self.vx)
-            diff = desired_angle - current_angle
-            while diff > math.pi: diff -= 2*math.pi
-            while diff < -math.pi: diff += 2*math.pi
-            current_angle += diff * min(1.0, self.homing_strength * dt)
-            spd = math.hypot(self.vx, self.vy)
-            self.vx = math.cos(current_angle) * spd
-            self.vy = math.sin(current_angle) * spd
+        if self.homing and enemies:
+            best = None; best_d = 300
+            for e in enemies:
+                d = dist((self.x,self.y),(e.x,e.y))
+                if d < best_d and e.alive:
+                    best_d=d; best=e
+            if best:
+                dx,dy = normalize((best.x-self.x, best.y-self.y))
+                spd = math.hypot(self.vx,self.vy)
+                self.vx += dx*spd*dt*3
+                self.vy += dy*spd*dt*3
+                l = math.hypot(self.vx,self.vy)
+                if l>0: self.vx=self.vx/l*spd; self.vy=self.vy/l*spd
 
-        if self.is_boomerang:
-            d = distance((self.x, self.y), (self.origin_x, self.origin_y))
-            if not self.return_phase and d > 280:
-                self.return_phase = True
-            if self.return_phase:
-                if self.owner == "player":
-                    tx, ty = player.x, player.y
-                else:
-                    tx, ty = self.origin_x, self.origin_y
-                a = angle_to((self.x, self.y), (tx, ty))
-                spd = math.hypot(self.vx, self.vy)
-                self.vx = math.cos(a) * spd
-                self.vy = math.sin(a) * spd
-                if distance((self.x, self.y), (tx, ty)) < 20:
-                    self.alive = False
-                    return
+        self.trail.append((self.x,self.y))
+        if len(self.trail)>8: self.trail.pop(0)
 
-        self.x += self.vx * dt
-        self.y += self.vy * dt
+        self.x += self.vx*dt
+        self.y += self.vy*dt
 
-        # Wall collision
-        tile_x = int(self.x // TILE_SIZE)
-        tile_y = int(self.y // TILE_SIZE)
-        if walls and 0 <= tile_x < len(walls[0]) and 0 <= tile_y < len(walls):
-            if walls[tile_y][tile_x] == TILE_WALL or walls[tile_y][tile_x] == TILE_WALL_ALT:
-                if self.aoe_radius > 0:
-                    self._explode(enemies, particles)
-                particles.emit_spark(self.x, self.y, self.color, 5)
+        for wall in walls:
+            if wall.collidepoint(self.x, self.y):
                 self.alive = False
                 return
 
-        # Enemy/player collision
-        if self.owner == "player":
-            for enemy in enemies:
-                if not enemy.alive or id(enemy) in self.hit_enemies:
-                    continue
-                if distance((self.x, self.y), (enemy.x, enemy.y)) < self.size + enemy.radius:
-                    self.hit_enemies.add(id(enemy))
-                    enemy.take_damage(self.damage, particles)
-                    if self.dot_damage > 0:
-                        enemy.apply_dot(self.dot_damage, self.dot_duration)
-                    if self.max_chain > 0 and self.chain_count < self.max_chain:
-                        self._do_chain(enemy, enemies, particles)
-                    if self.aoe_radius > 0:
-                        self._explode(enemies, particles)
-                        self.alive = False
-                        return
-                    if not self.pierce:
-                        self.alive = False
-                        return
-        elif self.owner == "enemy":
-            if distance((self.x, self.y), (player.x, player.y)) < self.size + 16:
-                if not player.is_invincible():
-                    player.take_damage(self.damage, particles)
-                    particles.emit_blood(player.x, player.y, 5)
-                self.alive = False
+    def draw(self, surf, camera):
+        if not self.alive: return
+        for i,pos in enumerate(self.trail):
+            alpha = int(120*(i/max(1,len(self.trail))))
+            sx,sy = camera.apply(*pos)
+            sz = max(1, int(self.size*(i/max(1,len(self.trail)))))
+            if sz > 0:
+                tmp = pygame.Surface((sz*2+1,sz*2+1),pygame.SRCALPHA)
+                pygame.draw.circle(tmp, (*self.color, alpha), (sz,sz), sz)
+                surf.blit(tmp,(sx-sz,sy-sz))
+        sx,sy = camera.apply(self.x,self.y)
+        pygame.draw.circle(surf, self.color, (int(sx),int(sy)), self.size)
+        pygame.draw.circle(surf, WHITE, (int(sx),int(sy)), max(1,self.size-2))
 
-    def _explode(self, enemies, particles):
-        particles.emit_explosion(self.x, self.y, self.aoe_radius)
-        for enemy in enemies:
-            if not enemy.alive:
-                continue
-            d = distance((self.x, self.y), (enemy.x, enemy.y))
-            if d < self.aoe_radius:
-                dmg = int(self.aoe_damage * (1 - d / self.aoe_radius))
-                enemy.take_damage(max(10, dmg), particles)
+class BoomerangProjectile:
+    def __init__(self, x, y, vx, vy, damage, color, owner="player"):
+        self.x=x; self.y=y; self.ox=x; self.oy=y
+        self.vx=vx; self.vy=vy; self.damage=damage; self.color=color
+        self.owner=owner; self.alive=True; self.returning=False
+        self.lifetime=2.5; self.hit_enemies=set()
+        self.size=10; self.angle=0
 
-    def _do_chain(self, hit_enemy, enemies, particles):
-        best = None
-        best_d = float('inf')
-        for e in enemies:
-            if not e.alive or e is hit_enemy or id(e) in self.hit_enemies:
-                continue
-            d = distance((hit_enemy.x, hit_enemy.y), (e.x, e.y))
-            if d < 200 and d < best_d:
-                best_d = d; best = e
-        if best:
-            particles.emit_chain(hit_enemy.x, hit_enemy.y, best.x, best.y)
-            self.hit_enemies.add(id(best))
-            best.take_damage(self.damage * 0.7, particles)
-            self.chain_count += 1
+    def update(self, dt, walls, player=None):
+        self.lifetime -= dt
+        if self.lifetime <= 0:
+            self.alive=False; return
 
-    def draw(self, surface, camera):
-        if not self.alive:
-            return
-        sx, sy = camera.world_to_screen(self.x, self.y)
-        if -20 < sx < SCREEN_WIDTH+20 and -20 < sy < SCREEN_HEIGHT+20:
-            pygame.draw.circle(surface, self.color, (int(sx), int(sy)), self.size)
-            inner_c = tuple(min(255, c+80) for c in self.color[:3])
-            pygame.draw.circle(surface, inner_c, (int(sx), int(sy)), max(1, self.size-2))
+        if not self.returning:
+            d = dist((self.x,self.y),(self.ox,self.oy))
+            if d > 250:
+                self.returning=True
+
+        if self.returning and player:
+            dx,dy = normalize((player.x-self.x, player.y-self.y))
+            spd = math.hypot(self.vx,self.vy)
+            self.vx = dx*max(spd,300)
+            self.vy = dy*max(spd,300)
+            if dist((self.x,self.y),(player.x,player.y)) < 20:
+                self.alive=False; return
+        else:
+            self.vx *= 0.99; self.vy *= 0.99
+
+        self.x += self.vx*dt
+        self.y += self.vy*dt
+        self.angle += 360*dt
+
+        for wall in walls:
+            if wall.collidepoint(self.x,self.y):
+                self.returning=True
+
+    def draw(self, surf, camera):
+        if not self.alive: return
+        sx,sy = camera.apply(self.x,self.y)
+        tmp = pygame.Surface((24,24), pygame.SRCALPHA)
+        pygame.draw.arc(tmp, self.color, (2,2,20,20), 0, math.pi*1.5, 4)
+        rotated = pygame.transform.rotate(tmp, self.angle)
+        surf.blit(rotated, (int(sx)-rotated.get_width()//2, int(sy)-rotated.get_height()//2))
+
+class FlameParticle:
+    def __init__(self, x, y, vx, vy):
+        self.x=x; self.y=y; self.vx=vx; self.vy=vy
+        self.lifetime=random.uniform(0.3,0.7)
+        self.max_life=self.lifetime; self.alive=True
+        self.damage_tick=0.0; self.size=random.randint(6,12)
+        self.hit_enemies=set()
+        self.owner="player"
+        self.aoe_radius=0; self.piercing=True
+
+    def update(self, dt, walls, enemies=None):
+        self.lifetime-=dt
+        if self.lifetime<=0: self.alive=False; return
+        self.x+=self.vx*dt; self.y+=self.vy*dt
+        self.vx*=0.92; self.vy*=0.92
+
+    def draw(self, surf, camera):
+        if not self.alive: return
+        t=self.lifetime/self.max_life
+        r=min(255,int(255))
+        g=min(255,int(160*t))
+        b=0
+        sx,sy=camera.apply(self.x,self.y)
+        sz=max(2,int(self.size*t))
+        tmp=pygame.Surface((sz*2,sz*2),pygame.SRCALPHA)
+        pygame.draw.circle(tmp,(r,g,b,int(200*t)),(sz,sz),sz)
+        surf.blit(tmp,(int(sx)-sz,int(sy)-sz))
+
+class RailBeam:
+    def __init__(self, x1, y1, x2, y2, damage, color=PURPLE):
+        self.x1=x1;self.y1=y1;self.x2=x2;self.y2=y2
+        self.damage=damage;self.color=color
+        self.lifetime=0.2;self.alive=True
+        self.owner="player";self.aoe_radius=0
+        self.piercing=True;self.hit_enemies=set()
+        self.size=4
+        self.x=x1;self.y=y1;self.vx=0;self.vy=0
+
+    def update(self, dt, walls, enemies=None):
+        self.lifetime-=dt
+        if self.lifetime<=0: self.alive=False
+
+    def draw(self, surf, camera):
+        if not self.alive: return
+        sx1,sy1=camera.apply(self.x1,self.y1)
+        sx2,sy2=camera.apply(self.x2,self.y2)
+        pygame.draw.line(surf,WHITE,(int(sx1),int(sy1)),(int(sx2),int(sy2)),6)
+        pygame.draw.line(surf,self.color,(int(sx1),int(sy1)),(int(sx2),int(sy2)),3)
+
+class EnemyProjectile:
+    def __init__(self, x, y, vx, vy, damage, color=RED, size=7):
+        self.x=x;self.y=y;self.vx=vx;self.vy=vy
+        self.damage=damage;self.color=color;self.size=size
+        self.alive=True;self.lifetime=4.0;self.owner="enemy"
+        self.aoe_radius=0;self.piercing=False;self.hit_enemies=set()
+
+    def update(self, dt, walls, enemies=None):
+        self.lifetime-=dt
+        if self.lifetime<=0: self.alive=False; return
+        self.x+=self.vx*dt; self.y+=self.vy*dt
+        for wall in walls:
+            if wall.collidepoint(self.x,self.y):
+                self.alive=False; return
+
+    def draw(self, surf, camera):
+        if not self.alive: return
+        sx,sy=camera.apply(self.x,self.y)
+        pygame.draw.circle(surf,self.color,(int(sx),int(sy)),self.size)
